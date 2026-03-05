@@ -2,7 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import { ActivityStats, DashboardStats, Inspection, User } from '../types';
 
 import axios from "axios";
-const BASE_URL = "http://192.168.1.24:3001/api";
+const BASE_URL = "http://3.12.73.118:3001/api";
 
 // Mock Data
 const MOCK_USER: User = {
@@ -12,7 +12,6 @@ const MOCK_USER: User = {
   phone: '123-456-7890',
   role: 'inspector'
 };
-
 
 interface LoginResponse {
   token: string;
