@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "y",
+      "bundleIdentifier": "com.ankit.dimsapp",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -24,7 +24,9 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.ankit_1112.DIMS_App"
+      "package": "com.ankit_1112.DIMS_App",
+      "usesCleartextTraffic": true,
+      "permissions": ["INTERNET"]
     },
     "web": {
       "output": "static",
@@ -52,8 +54,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "dfa34089-7616-4673-b8df-c48db6b7f88e"
+        "projectId": "a6cfe91b-8a0a-4eff-8b71-3609e46a1c0c"
       }
-    }
+    },
+    "owner": "ankit_1112"
   }
 }

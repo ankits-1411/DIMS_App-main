@@ -2,6 +2,10 @@ import * as SecureStore from "expo-secure-store";
 import { ActivityStats, DashboardStats, Inspection, User } from '../types';
 
 import axios from "axios";
+axios.get("http://3.12.73.118:3001/api")
+.then(res => console.log("API WORKING", res.data))
+.catch(err => console.log("API ERROR", err));
+
 const BASE_URL = "http://3.12.73.118:3001/api";
 
 // Mock Data
@@ -33,13 +37,12 @@ export const authAPI = {
 
       return response.data; // token + user returned to AuthContext
     } catch (error: any) {
-      console.log("API login error:", error?.response);
+      console.log("LOGIN ERROR FULL:", error);
+  console.log("LOGIN ERROR RESPONSE:", error?.response);
+  console.log("LOGIN ERROR DATA:", error?.response?.data);
+  console.log("LOGIN ERROR MESSAGE:", error?.message);
 
-      throw new Error(
-        error?.response?.data?.message ||
-        error?.response?.data?.detail ||
-        "Invalid email or password"
-      );
+  throw error;
     }
   },
   register: async (data: { email: string; password: string; name: string; phone?: string }) => {
