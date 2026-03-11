@@ -110,6 +110,7 @@ export const inspectionsAPI = {
           : null,
 
       property_address: item.propertyAddress ?? "",
+      dealname: item.dealname ?? "",
       inspectionMapImages: Array.isArray(item.inspectionMapImages) ? item.inspectionMapImages : [],
       status: item.status ?? "pending",
       created_date: item.createdDate ?? item.createdAt ?? "",
@@ -155,6 +156,7 @@ export const inspectionsAPI = {
 
       return {
         id: item._id ?? item.inspectionId ?? "",
+        dealname: item.dealname ?? "",
         inspectionMapImages: Array.isArray(item.inspectionMapImages) ? item.inspectionMapImages : [],
         inspectionId: item.inspectionId ?? "",
         property_address: item.propertyAddress ?? "",

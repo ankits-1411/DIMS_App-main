@@ -31,7 +31,7 @@ export const JobCard: React.FC<JobCardProps> = ({ inspection, onPress }) => {
         <View style={styles.headerLeft}>
           <Ionicons name="home-outline" size={20} color={theme.primary} />
           <Text style={[styles.id, { color: theme.textSecondary }]} numberOfLines={1}>
-            #{(inspection.id || "").toString().slice(0, 8)}
+            {(inspection.dealname || "#" + inspection.id || "").toString().slice(0, 8)}
           </Text>
         </View>
         <View style={[styles.badge, getStatusBadgeStyle()]}>

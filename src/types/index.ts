@@ -16,6 +16,7 @@ export interface AuthState {
 export interface Inspection {
   id: string;
   distance: string,
+  dealname: string;
   inspectionId: string,
   inspectionMapImages: string[];
   property_address: string;

@@ -125,6 +125,12 @@ export default function JobDetailScreen() {
         <View style={[styles.card, { backgroundColor: theme.surface }]}>
           <View style={styles.infoRow}>
             <Ionicons name="information-circle-outline" size={20} color={theme.primary} />
+            <Text style={[styles.infoLabel, { color: theme.textSecondary }]}>Deal Name:</Text>
+            <Text style={[styles.infoValue, { color: theme.text }]}>{inspection.dealname}</Text>
+          </View>
+
+          <View style={styles.infoRow}>
+            <Ionicons name="information-circle-outline" size={20} color={theme.primary} />
             <Text style={[styles.infoLabel, { color: theme.textSecondary }]}>Inspection ID:</Text>
             <Text style={[styles.infoValue, { color: theme.text }]}>#{inspection.inspectionId}</Text>
           </View>

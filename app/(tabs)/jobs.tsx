@@ -54,6 +54,7 @@ export default function JobsScreen() {
         photos: item.photos || [],
         distance: item.distance || 0,
         inspectionMapImages: item.inspectionMapImages || [],
+        dealname: item.dealname || '',
       }));
       setJobs(mappedInspections);
     } catch (error) {
