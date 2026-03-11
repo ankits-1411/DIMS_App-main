@@ -5,6 +5,7 @@ import { useColorScheme } from 'react-native';
 import { AuthProvider } from '../src/context/AuthContext';
 import { ThemeProvider } from '../src/context/ThemeContext';
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import Toast from "react-native-toast-message";
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -42,6 +43,7 @@ export default function RootLayout() {
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="job-detail/[id]" />
           </Stack>
+          <Toast />
           </GestureHandlerRootView>
         </AuthProvider>
       </ThemeProvider>

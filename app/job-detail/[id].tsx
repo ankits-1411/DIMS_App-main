@@ -18,13 +18,13 @@ import {
 } from 'react-native';
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button } from '../../src/components/Button';
 import ImageAnnotationCanvas from '../../src/components/ImageAnnotationCanvas';
 import { LoadingSpinner } from '../../src/components/LoadingSpinner';
 import { useTheme } from '../../src/context/ThemeContext';
 import { inspectionsAPI } from '../../src/services/api';
 import { Inspection } from '../../src/types';
 import ImageUploadComponent from "../../src/components/ImageUpload";
+import ImageViewing from "react-native-image-viewing";
 
 const { width } = Dimensions.get('window');
 
@@ -40,9 +40,9 @@ export default function JobDetailScreen() {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [openAnnotation, setOpenAnnotation] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [downloadingPDF, setDownloadingPDF] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [visible, setVisible] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const { theme } = useTheme();
   const router = useRouter();
 
@@ -74,9 +74,9 @@ export default function JobDetailScreen() {
         }))
       );
       console.log("Mapped Photos:", (data.photos || []).map((p: any) => ({
-  uri: p.fileUrl,
-  note: p.note || "",
-})));
+        uri: p.fileUrl,
+        note: p.note || "",
+      })));
       setLocation(data.gps_coordinates || null);
     } catch (error) {
       console.error('Error loading inspection:', error);
@@ -85,170 +85,6 @@ export default function JobDetailScreen() {
       setLoading(false);
     }
   };
-
-  const handleEditPhoto = () => {
-    console.log("Edit photo clicked:", selectedPhoto);
-
-    // next step options:
-    // open cropper
-    // replace image
-    // annotate
-  };
-
-  const getCurrentLocation = async () => {
-    try {
-      const loc = await Location.getCurrentPositionAsync({});
-      const coords = {
-        lat: loc.coords.latitude,
-        lng: loc.coords.longitude,
-      };
-      setLocation(coords);
-      return coords;
-    } catch (error) {
-      console.error('Error getting location:', error);
-      return null;
-    }
-  };
-
-  // const takePhoto = async () => {
-  //   try {
-  //     const result = await ImagePicker.launchCameraAsync({
-  //       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-  //       allowsEditing: true,
-  //       quality: 0.7,
-  //       base64: true,
-  //     });
-
-  //     if (!result.canceled && result.assets[0].base64) {
-  //       const base64Image = `data:image/jpeg;base64,${result.assets[0].base64}`;
-
-  //       // Upload photo
-  //       await inspectionsAPI.uploadPhoto(id as string, base64Image);
-
-  //       // Update local state
-  //       setPhotos([...photos, { uri: base64Image, note: '' }]);
-
-  //       // Capture location if not already set
-  //       if (!location) {
-  //         await getCurrentLocation();
-  //       }
-
-  //       Alert.alert('Success', 'Photo captured and uploaded');
-  //     }
-  //   } catch (error) {
-  //     console.error('Error taking photo:', error);
-  //     Alert.alert('Error', 'Failed to capture photo');
-  //   }
-  // };
-
-  // const pickImage = async () => {
-  //   try {
-  //     const result = await ImagePicker.launchImageLibraryAsync({
-  //       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-  //       allowsMultipleSelection: false,
-  //       quality: 0.7,
-  //       base64: true,
-  //     });
-
-  //     if (!result.canceled && result.assets[0].base64) {
-  //       const base64Image = `data:image/jpeg;base64,${result.assets[0].base64}`;
-
-  //       // DO NOT upload yet
-  //       // DO NOT add to photos yet
-
-  //       // Open annotation screen
-  //       setSelectedPhoto(base64Image);
-  //       setSelectedIndex(null); // new image
-  //       setOpenAnnotation(true);
-  //     }
-  //   } catch (error) {
-  //     console.error('Error picking image:', error);
-  //     Alert.alert('Error', 'Failed to pick image');
-  //   }
-  // };
-
-  // const saveNotes = async () => {
-  //   try {
-  //     await inspectionsAPI.updateNotes(id as string, notes);
-  //     Alert.alert('Success', 'Notes saved');
-  //   } catch (error) {
-  //     console.error('Error saving notes:', error);
-  //     Alert.alert('Error', 'Failed to save notes');
-  //   }
-  // };
-
-  // const completeInspection = async () => {
-  //   if (photos.length === 0) {
-  //     Alert.alert('Error', 'Please capture at least one photo');
-  //     return;
-  //   }
-
-  //   Alert.alert(
-  //     'Complete Inspection',
-  //     'Are you sure you want to mark this inspection as completed?',
-  //     [
-  //       { text: 'Cancel', style: 'cancel' },
-  //       {
-  //         text: 'Complete',
-  //         onPress: async () => {
-  //           setSaving(true);
-  //           try {
-  //             // Save notes first
-  //             if (notes) {
-  //               await inspectionsAPI.updateNotes(id as string, notes);
-  //             }
-
-  //             for (let i = 0; i < photos.length; i++) {
-  //               await inspectionsAPI.uploadPhoto(
-  //                 id as string,
-  //                 photos[i].uri,
-  //                 photos[i].note
-  //               );
-  //             }
-  //             // Get current location
-  //             const currentLocation = location || await getCurrentLocation();
-
-  //             // Complete inspection
-  //             await inspectionsAPI.complete(id as string, currentLocation || undefined);
-
-  //             Alert.alert('Success', 'Inspection completed successfully', [
-  //               { text: 'OK', onPress: () => router.back() }
-  //             ]);
-  //           } catch (error: any) {
-  //             console.error('Error completing inspection:', error);
-  //             Alert.alert('Error', error.response?.data?.detail || 'Failed to complete inspection');
-  //           } finally {
-  //             setSaving(false);
-  //           }
-  //         },
-  //       },
-  //     ]
-  //   );
-  // };
-
-  // const downloadPDF = async () => {
-  //   setDownloadingPDF(true);
-  //   try {
-  //     const response = await inspectionsAPI.getPDF(id as string);
-  //     // const base64Data = response.pdf.split(',')[1];
-
-  //     const filename = `${FileSystem.cacheDirectory}inspection_${id}.pdf`;
-  //     // await FileSystem.writeAsStringAsync(filename, base64Data, {
-  //     //   encoding: FileSystem.EncodingType.Base64,
-  //     // });
-
-  //     if (await Sharing.isAvailableAsync()) {
-  //       await Sharing.shareAsync(filename);
-  //     } else {
-  //       Alert.alert('Success', 'PDF saved to device');
-  //     }
-  //   } catch (error) {
-  //     console.error('Error downloading PDF:', error);
-  //     Alert.alert('Error', 'Failed to download PDF');
-  //   } finally {
-  //     setDownloadingPDF(false);
-  //   }
-  // };
 
   if (loading) {
     return <LoadingSpinner />;
@@ -333,86 +169,7 @@ export default function JobDetailScreen() {
                 inspectionId={id as string}
                 onComplete={loadInspection}
               />
-              {/* <View style={styles.photoActions}>
-                <Button
-                  title="Take Photo"
-                  onPress={takePhoto}
-                  variant="primary"
-                  style={styles.photoButton}
-                />
-                <Button
-                  title="Upload from Gallery"
-                  onPress={pickImage}
-                  variant="outline"
-                  style={styles.photoButton}
-                />
-              </View> */}
-
-              {/* {photos.length > 0 && (
-                <View style={styles.photoGrid}>
-                  {photos.map((photo, index) => (
-                    <TouchableOpacity
-                      key={index}
-                      style={styles.photoThumbnail}
-                      onPress={() => {
-                        setSelectedPhoto(photo.uri);
-                        setSelectedNote(photo.note);
-                        setSelectedIndex(index); // 🔥 VERY IMPORTANT
-                        setOpenAnnotation(true);
-                      }}
-                    >
-                      <Image source={{ uri: photo.uri }} style={styles.thumbnailImage} />
-                      <View style={[styles.photoOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
-                        <Ionicons name="camera" size={16} color="#FFFFFF" />
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )} */}
             </View>
-
-            {/* <View style={[styles.card, { backgroundColor: theme.surface }]}>
-              <Text style={[styles.cardTitle, { color: theme.text }]}>Notes</Text>
-              <TextInput
-                style={[styles.notesInput, {
-                  backgroundColor: theme.background,
-                  color: theme.text,
-                  borderColor: theme.border,
-                }]}
-                value={notes}
-                onChangeText={setNotes}
-                placeholder="Add inspection notes..."
-                placeholderTextColor={theme.textSecondary}
-                multiline
-                numberOfLines={6}
-                textAlignVertical="top"
-              />
-              <Button
-                title="Save Notes"
-                onPress={saveNotes}
-                variant="outline"
-                style={{ marginTop: 12 }}
-              />
-            </View> */}
-
-            {/* {location && (
-              <View style={[styles.card, { backgroundColor: theme.surface }]}>
-                <Text style={[styles.cardTitle, { color: theme.text }]}>GPS Location</Text>
-                <View style={styles.locationInfo}>
-                  <Ionicons name="location" size={20} color={theme.primary} />
-                  <Text style={[styles.locationText, { color: theme.text }]}>
-                    Lat: {location.lat.toFixed(6)}, Lng: {location.lng.toFixed(6)}
-                  </Text>
-                </View>
-              </View>
-            )} */}
-
-            {/* <Button
-              title="Complete Inspection"
-              onPress={completeInspection}
-              loading={saving}
-              style={styles.completeButton}
-            /> */}
           </>
         )}
 
@@ -426,10 +183,8 @@ export default function JobDetailScreen() {
                     <TouchableOpacity
                       key={index}
                       onPress={() => {
-                        setSelectedPhoto(photo.uri);     // 🔥 set image
-                        setSelectedNote(photo.note);     // 🔥 set note
-                        setSelectedIndex(index);         // 🔥 store index
-                        setOpenAnnotation(true);         // open modal
+                        setCurrentImageIndex(index);
+                        setVisible(true);
                       }}
                     >
                       <Image
@@ -446,41 +201,41 @@ export default function JobDetailScreen() {
             </View>
 
             {/* Inspection Map Images Section */}
-<View style={[styles.card, { backgroundColor: theme.surface }]}>
-  <Text style={[styles.cardTitle, { color: theme.text }]}>
-    Inspection Map Images ({inspection.inspectionMapImages?.length || 0})
-  </Text>
+            <View style={[styles.card, { backgroundColor: theme.surface }]}>
+              <Text style={[styles.cardTitle, { color: theme.text }]}>
+                Inspection Map Images ({inspection.inspectionMapImages?.length || 0})
+              </Text>
 
-  {inspection.inspectionMapImages &&
-  inspection.inspectionMapImages.length > 0 ? (
-    <View style={styles.photoGrid}>
-      {inspection.inspectionMapImages.map((item: any, index: number) => (
-        <TouchableOpacity
-          key={index}
-          onPress={() => {
-            setSelectedPhoto(item.imageUrl);   // open full screen
-            setSelectedNote("");               // no note for map images
-            setSelectedIndex(null);            // not editable
-          }}
-        >
-          <Image
-            source={{ uri: item.imageUrl }}
-            style={{
-              width: (width - 64) / 3,
-              height: 120,
-              borderRadius: 8,
-            }}
-            resizeMode="cover"
-          />
-        </TouchableOpacity>
-      ))}
-    </View>
-  ) : (
-    <Text style={[styles.noData, { color: theme.textSecondary }]}>
-      No map images
-    </Text>
-  )}
-</View>
+              {inspection.inspectionMapImages &&
+                inspection.inspectionMapImages.length > 0 ? (
+                <View style={styles.photoGrid}>
+                  {inspection.inspectionMapImages.map((item: any, index: number) => (
+                    <TouchableOpacity
+                      key={index}
+                      onPress={() => {
+                        setSelectedPhoto(item.imageUrl);   // open full screen
+                        setSelectedNote("");               // no note for map images
+                        setSelectedIndex(null);            // not editable
+                      }}
+                    >
+                      <Image
+                        source={{ uri: item.imageUrl }}
+                        style={{
+                          width: (width - 64) / 3,
+                          height: 120,
+                          borderRadius: 8,
+                        }}
+                        resizeMode="cover"
+                      />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : (
+                <Text style={[styles.noData, { color: theme.textSecondary }]}>
+                  No map images
+                </Text>
+              )}
+            </View>
 
             {notes && (
               <View style={[styles.card, { backgroundColor: theme.surface }]}>
@@ -500,14 +255,6 @@ export default function JobDetailScreen() {
                 </View>
               </View>
             )}
-
-            {/* <Button
-              title="Download PDF Report"
-              onPress={downloadPDF}
-              loading={downloadingPDF}
-              variant="primary"
-              style={styles.pdfButton}
-            /> */}
           </>
         )}
       </ScrollView>
@@ -558,6 +305,31 @@ export default function JobDetailScreen() {
 
         </View>
       </Modal>
+      <ImageViewing
+        images={photos.map((p) => ({ uri: p.uri }))}
+        imageIndex={currentImageIndex}
+        visible={visible}
+        onRequestClose={() => setVisible(false)}
+
+        FooterComponent={({ imageIndex }) => (
+          <View
+            style={{
+              padding: 20,
+              backgroundColor: "rgba(0,0,0,0.6)",
+            }}
+          >
+            <Text
+              style={{
+                color: "#fff",
+                fontSize: 16,
+                textAlign: "center",
+              }}
+            >
+              {photos[imageIndex]?.note || "No notes"}
+            </Text>
+          </View>
+        )}
+      />
       {openAnnotation && selectedPhoto && (
         <Modal visible transparent animationType="slide">
           <View style={{ flex: 1, backgroundColor: "#000" }}>

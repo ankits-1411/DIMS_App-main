@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,17 +16,22 @@ import { useTheme } from '../../src/context/ThemeContext';
 import { LoadingSpinner } from '../../src/components/LoadingSpinner';
 import { Button } from '../../src/components/Button';
 import { profileAPI, inspectionsAPI } from '../../src/services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function ProfileScreen() {
   const [loading, setLoading] = useState(true);
+  const [autoSync, setAutoSync] = useState(true);
   const [profileData, setProfileData] = useState<any>(null);
   const { user, logout } = useAuth();
   const { theme, themeType, toggleTheme } = useTheme();
   const router = useRouter();
 
-  useEffect(() => {
-    loadProfile();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, [])
+  );
 
   const loadProfile = async () => {
     try {
@@ -63,6 +68,11 @@ export default function ProfileScreen() {
         },
       ]
     );
+  };
+
+  const toggleAutoSync = async (value: boolean) => {
+    setAutoSync(value);
+    await AsyncStorage.setItem('autoSync', JSON.stringify(value));
   };
 
   if (loading) {
@@ -139,7 +149,7 @@ export default function ProfileScreen() {
             />
           </View>
 
-          <View style={[styles.settingRow, { borderBottomColor: theme.border }]}>
+          {/* <View style={[styles.settingRow, { borderBottomColor: theme.border }]}>
             <View style={styles.settingLeft}>
               <Ionicons name="notifications" size={20} color={theme.text} />
               <Text style={[styles.settingText, { color: theme.text }]}>Notifications</Text>
@@ -149,15 +159,19 @@ export default function ProfileScreen() {
               trackColor={{ false: theme.border, true: theme.primary }}
               thumbColor="#FFFFFF"
             />
-          </View>
+          </View> */}
 
           <View style={styles.settingRow}>
             <View style={styles.settingLeft}>
               <Ionicons name="sync" size={20} color={theme.text} />
-              <Text style={[styles.settingText, { color: theme.text }]}>Auto Sync</Text>
+              <Text style={[styles.settingText, { color: theme.text }]}>
+                Auto Sync
+              </Text>
             </View>
+
             <Switch
-              value={true}
+              value={autoSync}
+              onValueChange={toggleAutoSync}
               trackColor={{ false: theme.border, true: theme.primary }}
               thumbColor="#FFFFFF"
             />

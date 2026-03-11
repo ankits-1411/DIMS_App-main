@@ -15,6 +15,7 @@ import { ActivityStats, ChartData, Inspection } from '../../src/types';
 import { BarChart } from 'react-native-gifted-charts';
 import { Ionicons } from '@expo/vector-icons';
 import { format } from 'date-fns';
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function ActivityScreen() {
   const [loading, setLoading] = useState(true);
@@ -24,9 +25,11 @@ export default function ActivityScreen() {
   const [recentCompletions, setRecentCompletions] = useState<Inspection[]>([]);
   const { theme } = useTheme();
 
-  useEffect(() => {
-    loadActivityData();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadActivityData();
+    }, [])
+  );
 
   const loadActivityData = async () => {
     try {
@@ -49,6 +52,7 @@ export default function ActivityScreen() {
         completed_date: item.completedDate ?? "",
         inspector_name: item.assignedTo ?? "",
         photos: Array.isArray(item.photos) ? item.photos : [],
+        inspectionMapImages: Array.isArray(item.inspectionMapImages) ? item.inspectionMapImages : [],
       }));
 
       const completed = mappedInspections

@@ -16,6 +16,7 @@ import { JobCard } from '../../src/components/JobCard';
 import { LoadingSpinner } from '../../src/components/LoadingSpinner';
 import { inspectionsAPI } from '../../src/services/api';
 import { Inspection } from '../../src/types';
+import { useFocusEffect } from '@react-navigation/native';
 
 type TabType = 'all' | 'pending' | 'completed';
 
@@ -29,9 +30,11 @@ export default function JobsScreen() {
   const { theme } = useTheme();
   const router = useRouter();
 
-  useEffect(() => {
-    loadJobs();
-  }, []);
+  useFocusEffect(
+    React.useCallback(() => {
+      loadJobs();
+    }, [])
+  );
 
   useEffect(() => {
     filterJobs();
@@ -50,6 +53,7 @@ export default function JobsScreen() {
         inspector_name: item.assignedToId?.name || '',
         photos: item.photos || [],
         distance: item.distance || 0,
+        inspectionMapImages: item.inspectionMapImages || [],
       }));
       setJobs(mappedInspections);
     } catch (error) {

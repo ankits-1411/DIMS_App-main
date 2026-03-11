@@ -174,9 +174,9 @@ export default function ImageAnnotationCanvas({ imageUri, initialNote, onSave, o
           <Ionicons name="color-fill-outline" size={22} color="#fff" />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => setTool("text")}>
+        {/* <TouchableOpacity onPress={() => setTool("text")}>
           <Ionicons name="text" size={22} color="#fff" />
-        </TouchableOpacity>
+        </TouchableOpacity> */}
 
               <TouchableOpacity onPress={handleUndo}>
                   <Ionicons name="arrow-undo" size={22} color="#fff" />

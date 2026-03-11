@@ -19,6 +19,7 @@ import { LoadingSpinner } from '../../src/components/LoadingSpinner';
 import { inspectionsAPI, activityAPI } from '../../src/services/api';
 import { Inspection, DashboardStats, ChartData } from '../../src/types';
 import { BarChart } from 'react-native-gifted-charts';
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
@@ -30,9 +31,11 @@ export default function DashboardScreen() {
   const { theme } = useTheme();
   const router = useRouter();
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadDashboardData();
+    }, [])
+  );
 
   const screenWidth = Dimensions.get('window').width;
   const loadDashboardData = async () => {
@@ -64,6 +67,7 @@ export default function DashboardScreen() {
         inspector_name: item.assignedToId?.name || '',
         photos: item.photos || [],
         distance: item.distance || 0,
+        inspectionMapImages: item.inspectionMapImages || [],
       }));
 
       setRecentJobs(
@@ -96,7 +100,7 @@ export default function DashboardScreen() {
           <Text style={[styles.greeting, { color: theme.textSecondary }]}>Welcome back,</Text>
           <Text style={[styles.userName, { color: theme.text }]}>{user?.name || 'Inspector'}</Text>
         </View>
-        <Ionicons name="notifications-outline" size={24} color={theme.text} />
+        {/* <Ionicons name="notifications-outline" size={24} color={theme.text} /> */}
       </View>
 
       <ScrollView

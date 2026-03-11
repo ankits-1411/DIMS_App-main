@@ -2,9 +2,6 @@ import * as SecureStore from "expo-secure-store";
 import { ActivityStats, DashboardStats, Inspection, User } from '../types';
 
 import axios from "axios";
-axios.get("http://3.12.73.118:3001/api")
-.then(res => console.log("API WORKING", res.data))
-.catch(err => console.log("API ERROR", err));
 
 const BASE_URL = "http://3.12.73.118:3001/api";
 
@@ -33,16 +30,22 @@ export const authAPI = {
           password,
         }
       );
-      console.log("API login response:", response.data);
+
+      if (response.data.user?.role !== "user") {
+        throw new Error("Access denied. Only users can login.");
+      }
 
       return response.data; // token + user returned to AuthContext
     } catch (error: any) {
-      console.log("LOGIN ERROR FULL:", error);
-  console.log("LOGIN ERROR RESPONSE:", error?.response);
-  console.log("LOGIN ERROR DATA:", error?.response?.data);
-  console.log("LOGIN ERROR MESSAGE:", error?.message);
+      if (!error?.isAxiosError) {
+      throw error;
+    }
 
-  throw error;
+    const message =
+      error?.response?.data?.message ||
+      "Login failed";
+
+    throw new Error(message);
     }
   },
   register: async (data: { email: string; password: string; name: string; phone?: string }) => {

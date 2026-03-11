@@ -15,6 +15,7 @@ import { useTheme } from '../src/context/ThemeContext';
 import { Input } from '../src/components/Input';
 import { Button } from '../src/components/Button';
 import { LoadingSpinner } from '../src/components/LoadingSpinner';
+import Toast from "react-native-toast-message";
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -41,7 +42,13 @@ export default function LoginScreen() {
       await login(email, password);
       router.replace('/(tabs)/dashboard');
     } catch (error: any) {
-      Alert.alert('Login Failed', error.message || 'Invalid credentials');
+      console.log("Login error:", error);
+      const message = error?.message || "Invalid credentials";
+
+      Toast.show({
+        type: "error",
+        text1: message,
+      });
     } finally {
       setLoading(false);
     }
