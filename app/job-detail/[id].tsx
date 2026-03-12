@@ -428,14 +428,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 12,
-    gap: 8,
+    flexWrap: 'wrap',
   },
   infoLabel: {
     fontSize: 14,
+    marginRight: 4,
   },
   infoValue: {
     fontSize: 14,
     fontWeight: '600',
+    flex: 1,
+    flexWrap: 'wrap',
   },
   address: {
     fontSize: 16,

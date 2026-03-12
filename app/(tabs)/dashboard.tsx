@@ -68,6 +68,7 @@ export default function DashboardScreen() {
         photos: item.photos || [],
         distance: item.distance || 0,
         inspectionMapImages: item.inspectionMapImages || [],
+        dealname: item.dealname || '',
       }));
 
       setRecentJobs(
@@ -234,13 +235,11 @@ const styles = StyleSheet.create({
   },
   statsGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+    justifyContent: 'space-between',
     marginTop: 12,
   },
   statsCard: {
-    flex: 1,
-    minWidth: 100,
+    width: '31%',
   },
   chartContainer: {
     padding: 16,
