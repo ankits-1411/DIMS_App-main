@@ -183,19 +183,24 @@ export default function CreateJobScreen() {
 
                 {/* Recurring Inspection Type */}
                 <View style={styles.field}>
-                    <Text style={[styles.label, { color: theme.text }]}>
+                    <Text style={[styles.label, { color: theme.text, opacity: formData.isImmediate ? 0.5 : 1  }]}>
                         Recurring Inspection Type
                     </Text>
 
                     <View
+                        pointerEvents={formData.isImmediate ? "none" : "auto"}
                         style={[
                             styles.pickerContainer,
-                            { borderColor: theme.border, backgroundColor: theme.surface },
+                            {
+                                borderColor: theme.border,
+                                backgroundColor: theme.surface,
+                                opacity: formData.isImmediate ? 0.5 : 1,
+                            },
                         ]}
                     >
                         <Picker
                             selectedValue={formData.recurrenceType || ''}
-                            enabled={!formData.isImmediate}
+                            // enabled={!formData.isImmediate}
                             onValueChange={(value) =>
                                 handleChange('recurrenceType', value as RecurrenceType)
                             }
@@ -207,7 +212,7 @@ export default function CreateJobScreen() {
                                 color: theme.text, // 👈 IMPORTANT for iOS dropdown list
                             }}
                         >
-                            <Picker.Item label="Select recurrence type" value="" />
+                            {/* <Picker.Item label="Select recurrence type" value="" /> */}
                             <Picker.Item label="Monthly" value="monthly" />
                             <Picker.Item label="Quarterly" value="quarterly" />
                             <Picker.Item label="Bi-Annual" value="biAnnual" />

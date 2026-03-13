@@ -53,6 +53,7 @@ export default function ActivityScreen() {
         inspector_name: item.assignedTo ?? "",
         photos: Array.isArray(item.photos) ? item.photos : [],
         inspectionMapImages: Array.isArray(item.inspectionMapImages) ? item.inspectionMapImages : [],
+        dealname: item.dealname ?? "",
       }));
 
       const completed = mappedInspections
@@ -160,7 +161,7 @@ export default function ActivityScreen() {
                   <Ionicons name="checkmark-circle" size={24} color={theme.success} />
                   <View style={styles.completionInfo}>
                     <Text style={[styles.completionId, { color: theme.textSecondary }]}>
-                      #{inspection.id.slice(0, 8)}
+                      {inspection.dealname || `#${inspection.id.slice(0, 8)}`}
                     </Text>
                     <Text style={[styles.completionAddress, { color: theme.text }]} numberOfLines={1}>
                       {inspection.property_address}
