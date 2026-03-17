@@ -280,6 +280,7 @@ const completeInspection = async () => {
       <TouchableOpacity
         style={[styles.button, { backgroundColor: "green" }]}
         onPress={completeInspection}
+        disabled={saving}
       >
         <Text style={styles.buttonText}>
           {saving ? "Completing..." : "Complete Inspection"}

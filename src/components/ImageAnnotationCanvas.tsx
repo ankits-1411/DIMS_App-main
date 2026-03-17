@@ -37,6 +37,7 @@ export default function ImageAnnotationCanvas({ imageUri, initialNote, onSave, o
   const [notes, setNotes] = useState(initialNote || "");
   const [startPoint, setStartPoint] = useState<{ x: number; y: number } | null>(null);
   const [texts, setTexts] = useState<{ x: number; y: number; text: string }[]>([]);
+  const [savingImage, setSavingImage] = useState(false);
 
   const font = null;
   const canvasRef = useRef<React.ComponentRef<typeof Canvas>>(null);
@@ -63,7 +64,7 @@ export default function ImageAnnotationCanvas({ imageUri, initialNote, onSave, o
   // Gesture handler
   const panGesture = Gesture.Pan().runOnJS(true)
     .onBegin((e) => {
-        console.log("TOUCH START GESTURE WORKING");
+      console.log("TOUCH START GESTURE WORKING");
       setStartPoint({ x: e.x, y: e.y });
 
       if (tool === "pen" || tool === "highlight") {
@@ -116,34 +117,44 @@ export default function ImageAnnotationCanvas({ imageUri, initialNote, onSave, o
       setStartPoint(null);
     });
 
-    const handleUndo = () => {
-        setPaths((prev) => {
-            if (prev.length === 0) return prev;
-            const updated = [...prev];
-            updated.pop();
-            return updated;
-        });
-    };
+  const handleUndo = () => {
+    setPaths((prev) => {
+      if (prev.length === 0) return prev;
+      const updated = [...prev];
+      updated.pop();
+      return updated;
+    });
+  };
 
-    const handleSaveImage = async () => {
-  if (!canvasRef.current) return;
+  const handleSaveImage = async () => {
+    if (savingImage) return; // 🔥 prevents multiple clicks
 
-  const snapshot = canvasRef.current.makeImageSnapshot();
-  const pngBase64 = snapshot.encodeToBase64();
+    try {
+      setSavingImage(true);
 
-  const filePath =
-    FileSystem.cacheDirectory + `annotated_${Date.now()}.png`;
+      if (!canvasRef.current) return;
 
-  await FileSystem.writeAsStringAsync(filePath, pngBase64, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+      const snapshot = canvasRef.current.makeImageSnapshot();
+      const pngBase64 = snapshot.encodeToBase64();
 
-  onSave({
-    fileUri: filePath,
-    paths,
-    notes,
-  });
-};
+      const filePath =
+        FileSystem.cacheDirectory + `annotated_${Date.now()}.png`;
+
+      await FileSystem.writeAsStringAsync(filePath, pngBase64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      onSave({
+        fileUri: filePath,
+        paths,
+        notes,
+      });
+    } catch (err) {
+      console.log("SAVE ERROR:", err);
+    } finally {
+      setSavingImage(false);
+    }
+  };
 
   if (!image || !fileUri) {
     return (
@@ -178,9 +189,9 @@ export default function ImageAnnotationCanvas({ imageUri, initialNote, onSave, o
           <Ionicons name="text" size={22} color="#fff" />
         </TouchableOpacity> */}
 
-              <TouchableOpacity onPress={handleUndo}>
-                  <Ionicons name="arrow-undo" size={22} color="#fff" />
-              </TouchableOpacity>
+        <TouchableOpacity onPress={handleUndo}>
+          <Ionicons name="arrow-undo" size={22} color="#fff" />
+        </TouchableOpacity>
 
         <TouchableOpacity onPress={() => setPaths([])}>
           <Ionicons name="trash" size={22} color="red" />
@@ -190,8 +201,16 @@ export default function ImageAnnotationCanvas({ imageUri, initialNote, onSave, o
           <Ionicons name="close" size={26} color="#fff" />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={handleSaveImage}>
-          <Ionicons name="checkmark" size={26} color="green" />
+        <TouchableOpacity
+          onPress={handleSaveImage}
+          disabled={savingImage}
+          style={{ opacity: savingImage ? 0.5 : 1 }}
+        >
+          {savingImage ? (
+            <ActivityIndicator size="small" color="green" />
+          ) : (
+            <Ionicons name="checkmark" size={26} color="green" />
+          )}
         </TouchableOpacity>
       </View>
 
@@ -214,17 +233,17 @@ export default function ImageAnnotationCanvas({ imageUri, initialNote, onSave, o
             <Path path={currentPath} style="stroke" strokeWidth={3} color="red" />
           )}
 
-                  {font &&
-                      texts.map((t, i) => (
-                          <SkiaText
-                              key={i}
-                              x={t.x}
-                              y={t.y}
-                              text={t.text}
-                              font={font}
-                              color="white"
-                          />
-                      ))}
+          {font &&
+            texts.map((t, i) => (
+              <SkiaText
+                key={i}
+                x={t.x}
+                y={t.y}
+                text={t.text}
+                font={font}
+                color="white"
+              />
+            ))}
         </Canvas>
       </GestureDetector>
 
@@ -245,11 +264,11 @@ export default function ImageAnnotationCanvas({ imageUri, initialNote, onSave, o
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#000" },
   toolbar: {
-  flexDirection: "row",
-  justifyContent: "space-around",
-  paddingVertical: 12,
-  backgroundColor: "#111",
-},
+    flexDirection: "row",
+    justifyContent: "space-around",
+    paddingVertical: 12,
+    backgroundColor: "#111",
+  },
   notes: { padding: 12 },
   input: {
     borderWidth: 1,
