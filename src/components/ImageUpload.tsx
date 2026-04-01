@@ -41,37 +41,38 @@ export default function ImageUploadComponent({
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
   const [selectedNote, setSelectedNote] = useState("");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [locationImage, setLocationImage] = useState<any>(null);
   const [openAnnotation, setOpenAnnotation] = useState(false);
   const [capturingGPS, setCapturingGPS] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const takePhoto = async () => {
-  try {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Camera permission is required");
-      return;
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Camera permission is required");
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        base64: true,
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets[0].base64) {
+        const base64Image = `data:image/jpeg;base64,${result.assets[0].base64}`;
+
+        // 🔥 Open in annotation
+        setSelectedPhoto(base64Image);
+        setSelectedIndex(null);
+        setSelectedNote("");
+        setOpenAnnotation(true);
+      }
+    } catch (error) {
+      Alert.alert("Failed to open camera");
     }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      base64: true,
-      quality: 0.7,
-    });
-
-    if (!result.canceled && result.assets[0].base64) {
-      const base64Image = `data:image/jpeg;base64,${result.assets[0].base64}`;
-
-      // 🔥 Open in annotation
-      setSelectedPhoto(base64Image);
-      setSelectedIndex(null);
-      setSelectedNote("");
-      setOpenAnnotation(true);
-    }
-  } catch (error) {
-    Alert.alert("Failed to open camera");
-  }
-};
+  };
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -89,125 +90,144 @@ export default function ImageUploadComponent({
     }
   };
 
-const captureGPS = async () => {
-  try {
-    setCapturingGPS(true);
+  const captureGPS = async () => {
+    try {
+      setCapturingGPS(true);
 
-    Alert.alert("Capturing Coordinates", "Getting your GPS location...");
+      Alert.alert("Capturing Coordinates", "Getting your GPS location...");
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
+      const { status } = await Location.requestForegroundPermissionsAsync();
 
-    if (status !== "granted") {
-      Alert.alert("Permission Required", "Location permission is required.");
+      if (status !== "granted") {
+        Alert.alert("Permission Required", "Location permission is required.");
+        setCapturingGPS(false);
+        return;
+      }
+
+      const enabled = await Location.hasServicesEnabledAsync();
+      if (!enabled) {
+        Alert.alert("Location Disabled", "Please enable GPS in device settings.");
+        setCapturingGPS(false);
+        return;
+      }
+
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+
+      const coords = {
+        lat: loc.coords.latitude,
+        lng: loc.coords.longitude,
+      };
+
+      setGpsLocation(coords);
+
+      // ✅ Generate map image
+      const mapUrl = getMapImage(coords.lat, coords.lng);
+      setLocationImage(mapUrl);
+
+    } catch (error) {
+      Alert.alert("Error", "Failed to capture GPS location.");
+    } finally {
       setCapturingGPS(false);
+    }
+  };
+
+  const getMapImage = (lat: number, lng: number) => {
+    let mapkey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+    console.log("MAP KEY:", mapkey);
+    const mapUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=17&size=600x300&markers=color:red%7C${lat},${lng}&key=${mapkey}`;
+    return mapUrl;
+  };
+
+  const completeInspection = async () => {
+    if (images.length === 0) {
+      Alert.alert("Please add at least one photo");
       return;
     }
 
-    const enabled = await Location.hasServicesEnabledAsync();
-    if (!enabled) {
-      Alert.alert("Location Disabled", "Please enable GPS in device settings.");
-      setCapturingGPS(false);
+    if (!gpsLocation) {
+      Alert.alert("Please capture GPS before completing");
       return;
     }
 
-    const loc = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Highest,
-    });
+    setSaving(true);
 
-    const coords = {
-      lat: loc.coords.latitude,
-      lng: loc.coords.longitude,
-    };
+    try {
+      const formData = new FormData();
 
-    setGpsLocation(coords);
+      const imageMeta: { filename: string; note: string }[] = [];
+      // 🔹 Append Images
+      images.forEach((img, index) => {
+        const filename = `photo_${index}.jpg`;
 
-  } catch (error) {
-    Alert.alert("Error", "Failed to capture GPS location.");
-  } finally {
-    setCapturingGPS(false);
-  }
-};
+        formData.append("photos", {
+          uri: img.uri,
+          name: filename,
+          type: "image/jpeg",
+        } as any);
 
-const completeInspection = async () => {
-  if (images.length === 0) {
-    Alert.alert("Please add at least one photo");
-    return;
-  }
-
-  if (!gpsLocation) {
-    Alert.alert("Please capture GPS before completing");
-    return;
-  }
-
-  setSaving(true);
-
-  try {
-    const formData = new FormData();
-
-    const imageMeta: { filename: string; note: string }[] = [];
-    // 🔹 Append Images
-    images.forEach((img, index) => {
-      const filename = `photo_${index}.jpg`;
-
-      formData.append("photos", {
-        uri: img.uri,
-        name: filename,
-        type: "image/jpeg",
-      } as any);
-
-      // Add image meta (note per image)
+        // Add image meta (note per image)
         imageMeta.push({
-            filename,
-            note: img.note || "",
+          filename,
+          note: img.note || "",
         });
-    });
+      });
 
-    // 🔹 Append General Notes
-    formData.append("imageMeta", JSON.stringify(imageMeta));
-    formData.append("notes", generalNotes.trim());
+      // 🔹 Append General Notes
+      formData.append("imageMeta", JSON.stringify(imageMeta));
+      formData.append("notes", generalNotes.trim());
 
-    // 🔹 Append GPS
-    formData.append("manualGpsLat", String(gpsLocation.lat));
-    formData.append("manualGpsLng", String(gpsLocation.lng));
+      if (locationImage) {
+        formData.append("currentLocationImage", {
+          uri: locationImage,
+          name: "location-map.png",
+          type: "image/png",
+        } as any);
+      }
 
-    // 🔹 Append inspectionId (optional if needed by backend)
-    // formData.append("inspectionId", inspectionId);
+      // 🔹 Append GPS
+      formData.append("gpsLat", String(gpsLocation.lat));
+      formData.append("gpsLng", String(gpsLocation.lng));
 
-    console.log("FINAL FORM DATA READY");
+      // 🔹 Append inspectionId (optional if needed by backend)
+      // formData.append("inspectionId", inspectionId);
 
-    const res = await inspectionsAPI.uploadInspectionPhotos(
-      inspectionId,
-      formData
-    );
-    console.log("UPLOAD RESPONSE:", res.data);
+      console.log("FINAL FORM DATA READY");
 
-    const uploaded = res.data;
+      const res = await inspectionsAPI.uploadInspectionPhotos(
+        inspectionId,
+        formData
+      );
+      console.log("UPLOAD RESPONSE:", res.data);
 
-    onComplete && onComplete();
+      const uploaded = res.data;
 
-    Alert.alert(
-      "Inspection Completed",
-      `Uploaded ${images.length} image(s) and GPS location`
-    );
+      onComplete && onComplete();
 
-    // 🔥 Don't call API yet — wait for your API function
-    // await inspectionsAPI.completeInspection(formData);
+      Alert.alert(
+        "Inspection Completed",
+        `Uploaded ${images.length} image(s) and GPS location`
+      );
 
-    setImages([]);
-    onComplete();
+      // 🔥 Don't call API yet — wait for your API function
+      // await inspectionsAPI.completeInspection(formData);
 
-  } catch (err) {
-    console.log("ERROR:", err);
-    Alert.alert("Upload failed");
-  } finally {
-    setSaving(false);
-  }
-};
+      setImages([]);
+      onComplete();
+
+    } catch (err) {
+      console.log("ERROR:", err);
+      Alert.alert("Upload failed");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <View style={{ marginTop: 20 }}>
 
-        <TouchableOpacity style={styles.button} onPress={takePhoto}>
+      <TouchableOpacity style={styles.button} onPress={takePhoto}>
         <Text style={styles.buttonText}>Take Photo</Text>
       </TouchableOpacity>
 
@@ -215,15 +235,15 @@ const completeInspection = async () => {
         <Text style={styles.buttonText}>Upload Photo</Text>
       </TouchableOpacity>
 
-          <TouchableOpacity
-              style={styles.button}
-              onPress={captureGPS}
-              disabled={capturingGPS}
-          >
-              <Text style={styles.buttonText}>
-                  {capturingGPS ? "Capturing Coordinates..." : "Capture GPS"}
-              </Text>
-          </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.button}
+        onPress={captureGPS}
+        disabled={capturingGPS}
+      >
+        <Text style={styles.buttonText}>
+          {capturingGPS ? "Capturing Coordinates..." : "Capture GPS"}
+        </Text>
+      </TouchableOpacity>
 
       <View style={styles.grid}>
         {images.map((photo, index) => (
@@ -241,41 +261,55 @@ const completeInspection = async () => {
         ))}
       </View>
 
-          {gpsLocation && (
-              <View style={styles.gpsContainer}>
-                  <Text style={styles.gpsTitle}>📍 GPS Location Captured</Text>
-                  <Text style={styles.gpsText}>
-                      Lat: {gpsLocation.lat.toFixed(6)}, Lng: {gpsLocation.lng.toFixed(6)}
-                  </Text>
-              </View>
-          )}
-
-          <Text
-              style={{
-                  fontSize: 16,
-                  fontWeight: "600",
-                  marginTop: 10,
-                  marginBottom: 6,
-                  color: theme.text,
-              }}
-          >
-              General Notes
+      {gpsLocation && (
+        <View style={styles.gpsContainer}>
+          <Text style={styles.gpsTitle}>📍 GPS Location Captured</Text>
+          <Text style={styles.gpsText}>
+            Lat: {gpsLocation.lat.toFixed(6)}, Lng: {gpsLocation.lng.toFixed(6)}
           </Text>
-          <TextInput
-              placeholder="General inspection notes..."
-              value={generalNotes}
-              onChangeText={setGeneralNotes}
-              multiline
-              placeholderTextColor={theme.textSecondary}
-              style={[
-                  styles.notes,
-                  {
-                      backgroundColor: theme.background,
-                      color: theme.text,
-                      borderColor: theme.border,
-                  },
-              ]}
-          />
+
+          {/* ✅ MAP IMAGE */}
+          {locationImage && (
+            <Image
+              source={{ uri: locationImage }}
+              style={{
+                width: "100%",
+                height: 150,
+                borderRadius: 10,
+                marginTop: 10,
+              }}
+              resizeMode="cover"
+            />
+          )}
+        </View>
+      )}
+
+      <Text
+        style={{
+          fontSize: 16,
+          fontWeight: "600",
+          marginTop: 10,
+          marginBottom: 6,
+          color: theme.text,
+        }}
+      >
+        General Notes
+      </Text>
+      <TextInput
+        placeholder="General inspection notes..."
+        value={generalNotes}
+        onChangeText={setGeneralNotes}
+        multiline
+        placeholderTextColor={theme.textSecondary}
+        style={[
+          styles.notes,
+          {
+            backgroundColor: theme.background,
+            color: theme.text,
+            borderColor: theme.border,
+          },
+        ]}
+      />
 
       <TouchableOpacity
         style={[styles.button, { backgroundColor: "green" }]}
@@ -349,33 +383,33 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   notes: {
-  borderWidth: 1,
-  borderRadius: 12,
-  paddingHorizontal: 14,
-  paddingVertical: 12,
-  fontSize: 15,
-  minHeight: 100,
-  textAlignVertical: "top",
-  marginTop: 12,
-  marginBottom: 10,
-},
-gpsContainer: {
-  marginTop: 12,
-  padding: 12,
-  borderRadius: 12,
-  backgroundColor: "#0f3d2e",
-  borderWidth: 1,
-  borderColor: "#1e6f4f",
-},
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    minHeight: 100,
+    textAlignVertical: "top",
+    marginTop: 12,
+    marginBottom: 10,
+  },
+  gpsContainer: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "#0f3d2e",
+    borderWidth: 1,
+    borderColor: "#1e6f4f",
+  },
 
-gpsTitle: {
-  color: "#4ade80",
-  fontWeight: "700",
-  marginBottom: 4,
-},
+  gpsTitle: {
+    color: "#4ade80",
+    fontWeight: "700",
+    marginBottom: 4,
+  },
 
-gpsText: {
-  color: "#a7f3d0",
-  fontSize: 13,
-},
+  gpsText: {
+    color: "#a7f3d0",
+    fontSize: 13,
+  },
 });

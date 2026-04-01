@@ -3,7 +3,7 @@ import { ActivityStats, DashboardStats, Inspection, User } from '../types';
 
 import axios from "axios";
 
-const BASE_URL = "http://3.12.73.118:3001/api";
+const BASE_URL = "http://3.139.93.189:3001/api";
 
 // Mock Data
 const MOCK_USER: User = {
@@ -122,6 +122,7 @@ export const inspectionsAPI = {
       gps_coordinates: item.gpsCoordinates ?? null,
       assigned_to: item.assignedToId?._id ?? "",
       assigned_to_email: item.assignedToId?.email ?? "",
+      currentLocationImage: item.currentLocationImage ?? undefined,
     };
   } catch (error: any) {
     console.log("Get inspection error FULL:", error);
@@ -169,6 +170,7 @@ export const inspectionsAPI = {
         gps_coordinates: item.gpsCoordinates ?? null,
         assigned_to: item.assignedToId?._id ?? "",
         assigned_to_email: item.assignedToId?.email ?? "",
+        currentLocationImage: item.currentLocationImage ?? undefined,
         distance:
           typeof item.distance === "number"
             ? item.distance

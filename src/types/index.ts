@@ -14,6 +14,7 @@ export interface AuthState {
 }
 
 export interface Inspection {
+  currentLocationImage: string | undefined;
   id: string;
   distance: string,
   dealname: string;

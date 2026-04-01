@@ -243,6 +243,30 @@ export default function JobDetailScreen() {
               )}
             </View>
 
+            <View style={[styles.card, { backgroundColor: theme.surface }]}>
+              <Text style={[styles.cardTitle, { color: theme.text }]}>
+                Current Location Image ({inspection.inspectionMapImages?.length || 0})
+              </Text>
+
+              {inspection.currentLocationImage  ? (
+                <View style={styles.photoGrid}>
+                      <Image
+                        source={{ uri: inspection.currentLocationImage }}
+                        style={{
+                          width: (width - 64) / 3,
+                          height: 120,
+                          borderRadius: 8,
+                        }}
+                        resizeMode="cover"
+                      />
+                </View>
+              ) : (
+                <Text style={[styles.noData, { color: theme.textSecondary }]}>
+                  No Current Location Image
+                </Text>
+              )}
+            </View>
+
             {notes && (
               <View style={[styles.card, { backgroundColor: theme.surface }]}>
                 <Text style={[styles.cardTitle, { color: theme.text }]}>Notes</Text>
