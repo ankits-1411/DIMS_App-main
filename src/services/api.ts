@@ -3,7 +3,7 @@ import { ActivityStats, DashboardStats, Inspection, User } from '../types';
 
 import axios from "axios";
 
-const BASE_URL = "http://3.139.93.189:3001/api";
+const BASE_URL = "https://api.hlwt.com/api";
 
 // Mock Data
 const MOCK_USER: User = {
