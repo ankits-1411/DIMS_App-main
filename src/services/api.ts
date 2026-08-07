@@ -5,6 +5,58 @@ import axios from "axios";
 
 const BASE_URL = "https://api.hlwt.com/api";
 
+// Uploads carry several full-resolution photos, so they need a much longer
+// budget than a plain JSON request. Without any timeout at all a stalled
+// upload hangs the "Complete Inspection" button forever.
+const REQUEST_TIMEOUT_MS = 30000;
+const UPLOAD_TIMEOUT_MS = 180000;
+
+/**
+ * Turns an axios failure into a message that says something useful. Axios
+ * reports every transport-level failure as the opaque string "Network Error",
+ * which is what made the upload bug so hard to diagnose.
+ */
+const describeError = (error: any, fallback: string): string => {
+  const status = error?.response?.status;
+
+  if (status) {
+    const serverMessage =
+      error.response?.data?.message || error.response?.data?.error;
+    if (serverMessage) return serverMessage;
+    if (status === 401 || status === 403) {
+      return "Your session has expired. Please sign in again.";
+    }
+    if (status === 413) {
+      return "The photos are too large for the server to accept.";
+    }
+    return `${fallback} (server returned ${status})`;
+  }
+
+  if (error?.code === "ECONNABORTED" || /timeout/i.test(error?.message || "")) {
+    return `${fallback}: the request timed out. Check your connection and try again.`;
+  }
+
+  if (error?.message === "Network Error" || error?.code === "ERR_NETWORK") {
+    return `${fallback}: could not reach the server. Check your internet connection and try again.`;
+  }
+
+  return error?.message || fallback;
+};
+
+const isTransportError = (error: any) =>
+  !error?.response &&
+  (error?.code === "ERR_NETWORK" || error?.message === "Network Error");
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const authHeader = async () => {
+  const token = await SecureStore.getItemAsync("authToken");
+  if (!token) {
+    throw new Error("You are not signed in. Please sign in again.");
+  }
+  return { Authorization: `Bearer ${token}` };
+};
+
 // Mock Data
 const MOCK_USER: User = {
   id: 'user-123',
@@ -59,6 +111,27 @@ export const authAPI = {
       }
     };
   },
+};
+
+/**
+ * Cheap authenticated GET used to tell two very different failures apart, since
+ * axios reports both as a bare "Network Error" with no status:
+ *   - the device genuinely cannot reach the API, versus
+ *   - the API is reachable but the upload request itself was refused (payload
+ *     too large, or the endpoint crashed and closed the socket).
+ */
+const isServerReachable = async (): Promise<boolean> => {
+  try {
+    const token = await SecureStore.getItemAsync("authToken");
+    await axios.get(`${BASE_URL}/inspections`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      timeout: 10000,
+    });
+    return true;
+  } catch (error: any) {
+    // Any HTTP response at all still proves the server answered.
+    return Boolean(error?.response);
+  }
 };
 
 // Inspections API
@@ -185,19 +258,70 @@ export const inspectionsAPI = {
   },
   uploadInspectionPhotos: async (
   inspectionId: string,
-  formData: FormData
+  formData: FormData,
+  onProgress?: (fraction: number) => void
 ) => {
-  const token = await SecureStore.getItemAsync("authToken");
-  return axios.post(
-    `${BASE_URL}/inspections/${inspectionId}/photos`,
-    formData,
-    {
-      headers: {
-        "Content-Type": "multipart/form-data",
-        Authorization: `Bearer ${token}`,
-      },
+  const headers = await authHeader();
+  const url = `${BASE_URL}/inspections/${inspectionId}/photos`;
+
+  // One retry: mobile uploads drop for transient reasons, and re-sending is
+  // safe here because the request re-reads the files from disk.
+  const attempts = 2;
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      // NOTE: do NOT set Content-Type here. React Native generates the
+      // multipart body natively and appends the required `boundary=` parameter;
+      // hard-coding "multipart/form-data" overrides that header and strips the
+      // boundary, so the server cannot parse any of the parts.
+      const response = await axios.post(url, formData, {
+        headers,
+        timeout: UPLOAD_TIMEOUT_MS,
+        onUploadProgress: (event) => {
+          if (onProgress && event.total) {
+            onProgress(Math.min(1, event.loaded / event.total));
+          }
+        },
+      });
+
+      console.log("Upload photos success:", response.status);
+      return response;
+    } catch (error: any) {
+      lastError = error;
+      console.log(`Upload photos error (attempt ${attempt}/${attempts}):`, {
+        url,
+        code: error?.code,
+        status: error?.response?.status,
+        data: error?.response?.data,
+        message: error?.message,
+      });
+
+      // A real HTTP response means the server made a decision — retrying it
+      // would just repeat the same rejection.
+      if (!isTransportError(error) || attempt === attempts) break;
+      await wait(1500);
     }
-  );
+  }
+
+  if (isTransportError(lastError)) {
+    const reachable = await isServerReachable();
+    console.log("Upload failed; server reachable:", reachable);
+
+    if (reachable) {
+      throw new Error(
+        "The server is reachable but refused the photo upload. The photos are " +
+          "most likely too large, or the upload endpoint failed on the server. " +
+          "Try again with fewer photos."
+      );
+    }
+    throw new Error(
+      "Photo upload failed: no connection to the server. Check your internet " +
+        "connection and try again."
+    );
+  }
+
+  throw new Error(describeError(lastError, "Photo upload failed"));
 },
   updateNotes: async (id: string, notes: string) => {
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -205,21 +329,23 @@ export const inspectionsAPI = {
   },
   complete: async (id: string, gps_coordinates?: { lat: number; lng: number }) => {
     try {
-      const token = await SecureStore.getItemAsync("authToken");
-      const response = await axios.patch(`${BASE_URL}/inspections/${id}/complete`, 
+      const headers = await authHeader();
+      const response = await axios.patch(
+        `${BASE_URL}/inspections/${id}/complete`,
         { gps_coordinates },
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        { headers, timeout: REQUEST_TIMEOUT_MS }
       );
+      console.log("Complete inspection success:", id, response.status);
       return response.data;
     } catch (error: any) {
-      console.log("Complete inspection error:", error?.response?.data);
-      throw new Error(
-        error?.response?.data?.message || "Failed to complete inspection"
-      );
+      console.log("Complete inspection error:", {
+        id,
+        code: error?.code,
+        status: error?.response?.status,
+        data: error?.response?.data,
+        message: error?.message,
+      });
+      throw new Error(describeError(error, "Failed to complete inspection"));
     }
   },
   getPDF: async (id: string) => {

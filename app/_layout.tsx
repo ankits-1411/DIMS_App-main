@@ -5,6 +5,7 @@ import { useColorScheme } from 'react-native';
 import { AuthProvider } from '../src/context/AuthContext';
 import { ThemeProvider } from '../src/context/ThemeContext';
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import Toast from "react-native-toast-message";
 
 export default function RootLayout() {
@@ -33,20 +34,25 @@ export default function RootLayout() {
     },
   };
 
+  // SafeAreaProvider is required for `useSafeAreaInsets()` to have any values to
+  // report. Without it, screens could only use the self-measuring
+  // <SafeAreaView>, which does not resolve insets correctly inside a Modal.
   return (
-    <NavigationThemeProvider value={navigationTheme}>
-      <ThemeProvider>
-        <AuthProvider>
-          <GestureHandlerRootView style={{ flex: 1 }}>
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="job-detail/[id]" />
-          </Stack>
-          <Toast />
-          </GestureHandlerRootView>
-        </AuthProvider>
-      </ThemeProvider>
-    </NavigationThemeProvider>
+    <SafeAreaProvider>
+      <NavigationThemeProvider value={navigationTheme}>
+        <ThemeProvider>
+          <AuthProvider>
+            <GestureHandlerRootView style={{ flex: 1 }}>
+              <Stack screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="index" />
+                <Stack.Screen name="(tabs)" />
+                <Stack.Screen name="job-detail/[id]" />
+              </Stack>
+              <Toast />
+            </GestureHandlerRootView>
+          </AuthProvider>
+        </ThemeProvider>
+      </NavigationThemeProvider>
+    </SafeAreaProvider>
   );
 }

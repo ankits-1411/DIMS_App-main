@@ -17,7 +17,11 @@ import {
   View
 } from 'react-native';
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  initialWindowMetrics,
+  SafeAreaProvider,
+  SafeAreaView,
+} from 'react-native-safe-area-context';
 import ImageAnnotationCanvas from '../../src/components/ImageAnnotationCanvas';
 import { LoadingSpinner } from '../../src/components/LoadingSpinner';
 import { useTheme } from '../../src/context/ThemeContext';
@@ -171,8 +175,13 @@ export default function JobDetailScreen() {
             <View style={[styles.card, { backgroundColor: theme.surface }]}>
               <Text style={[styles.cardTitle, { color: theme.text }]}>Photos</Text>
 
+              {/* The route param is the human-readable `inspectionId`
+                  ("manual-1786…"), because the job list navigates with it. The
+                  GET endpoint happens to resolve either form, but the photo
+                  upload and complete endpoints expect the Mongo `_id`, so pass
+                  the resolved id and only fall back to the route param. */}
               <ImageUploadComponent
-                inspectionId={id as string}
+                inspectionId={inspection.id || (id as string)}
                 onComplete={loadInspection}
               />
             </View>
@@ -187,7 +196,7 @@ export default function JobDetailScreen() {
                 <View style={styles.photoGrid}>
                   {photos.map((photo, index) => (
                     <TouchableOpacity
-                      key={index}
+                      key={`${photo.uri}-${index}`}
                       onPress={() => {
                         setCurrentImageIndex(index);
                         setVisible(true);
@@ -361,9 +370,13 @@ export default function JobDetailScreen() {
         )}
       />
       {openAnnotation && selectedPhoto && (
-        <Modal visible transparent animationType="slide">
-          <View style={{ flex: 1, backgroundColor: "#000" }}>
-            <GestureHandlerRootView style={{ flex: 1 }}>
+        <Modal visible transparent animationType="slide" statusBarTranslucent>
+          {/* A Modal is a separate native view hierarchy, so it needs its own
+              provider for the canvas's useSafeAreaInsets() to resolve insets. */}
+          <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+            <GestureHandlerRootView
+              style={{ flex: 1, backgroundColor: "#000" }}
+            >
               <ImageAnnotationCanvas
                 imageUri={selectedPhoto}
                 initialNote={selectedNote}
@@ -394,8 +407,7 @@ export default function JobDetailScreen() {
                 }}
               />
             </GestureHandlerRootView>
-
-          </View>
+          </SafeAreaProvider>
         </Modal>
       )}
     </SafeAreaView>
