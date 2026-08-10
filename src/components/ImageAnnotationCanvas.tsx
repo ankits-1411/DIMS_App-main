@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import {
   Canvas,
+  Group,
   ImageFormat,
   Path,
   Skia,
@@ -21,60 +22,62 @@ import {
   View,
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { runOnJS, useDerivedValue, useSharedValue } from "react-native-reanimated";
+import { useDerivedValue, useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+// `runOnJS` is deprecated in Reanimated 4; `scheduleOnRN` is its replacement.
+import { scheduleOnRN } from "react-native-worklets";
+import {
+  Annotation,
+  AnnotationTool,
+  DEFAULT_ANNOTATION_COLOR,
+  HIGHLIGHT_STROKE_PX,
+  isShapeTool,
+  PALETTE,
+  STROKE_PX,
+} from "../types/annotations";
 
-/**
- * Reserved vertical space for the chrome around the canvas. Deliberately erring
- * on the generous side: under-reserving would size the canvas taller than the
- * space available and clip the bottom of the photo.
- */
-const TOOLBAR_HEIGHT = 60;
-const NOTES_HEIGHT = 150;
+/** Reserved vertical space for the chrome around the canvas. */
+const ACTION_BAR_HEIGHT = 56;
+const TOOL_BAR_HEIGHT = 58;
+const PALETTE_HEIGHT = 52;
+const SELECTION_BAR_HEIGHT = 44;
+const NOTES_HEIGHT = 148;
 
-/** Points closer together than this are dropped: fewer points means a shorter
- *  path to rebuild each frame and a visibly smoother line. */
+/** Points closer together than this are dropped while drawing freehand. */
 const MIN_POINT_DISTANCE = 1.5;
+/** Movement below this (in base canvas px) counts as a tap, not a drag. */
+const TAP_SLOP = 6;
+/** On-screen radius of the resize handle, and of its (larger) touch target. */
+const HANDLE_RADIUS = 9;
+const HANDLE_TOUCH_RADIUS = 26;
+/** A new tapped shape is this fraction of the image width. */
+const DEFAULT_SHAPE_SIZE = 0.16;
+/** Shapes may not be resized below this fraction of the image width. */
+const MIN_SHAPE_SIZE = 0.03;
+const MAX_ZOOM = 5;
 
-type Tool = "pen" | "highlight" | "rect" | "circle";
 type Point = { x: number; y: number };
-type Stroke = { type: Tool; path: SkPath };
+/** Geometry in base-canvas pixels: centre point plus size. */
+type Geom = { x: number; y: number; w: number; h: number };
+/** What the active one-finger gesture is doing. */
+type DragMode = "none" | "draw" | "move" | "resize" | "create" | "pending";
 
-/**
- * Builds an SkPath from the raw touch points. Marked as a worklet so the exact
- * same geometry can be produced on the UI thread (for the live preview, every
- * frame) and on the JS thread (once, when the stroke is committed).
- *
- * Freehand strokes are smoothed with quadratic curves through the midpoint of
- * each pair of samples, which removes the polygonal look of raw `lineTo`
- * segments.
- */
-const buildPath = (points: Point[], tool: Tool): SkPath => {
+const EMPTY_GEOM: Geom = { x: 0, y: 0, w: 0, h: 0 };
+
+// ---------------------------------------------------------------------------
+// Geometry helpers. All are worklets so the identical maths can run on the UI
+// thread (live preview, every frame) and on the JS thread (once, on commit) —
+// there is deliberately no second implementation to drift out of sync.
+// ---------------------------------------------------------------------------
+
+/** Freehand path, smoothed with quadratic curves through sample midpoints. */
+const freehandPath = (points: Point[]): SkPath => {
   "worklet";
   const path = Skia.Path.Make();
   if (points.length === 0) return path;
 
   const first = points[0];
   const last = points[points.length - 1];
-
-  if (tool === "rect") {
-    // Normalised with min/abs so dragging up or left still produces a
-    // rectangle — negative width/height silently drew nothing before.
-    path.addRect({
-      x: Math.min(first.x, last.x),
-      y: Math.min(first.y, last.y),
-      width: Math.abs(last.x - first.x),
-      height: Math.abs(last.y - first.y),
-    });
-    return path;
-  }
-
-  if (tool === "circle") {
-    const dx = last.x - first.x;
-    const dy = last.y - first.y;
-    path.addCircle(first.x, first.y, Math.sqrt(dx * dx + dy * dy));
-    return path;
-  }
 
   path.moveTo(first.x, first.y);
 
@@ -99,19 +102,68 @@ const buildPath = (points: Point[], tool: Tool): SkPath => {
   return path;
 };
 
-const strokeWidthFor = (tool: Tool) => (tool === "highlight" ? 12 : 3);
-const colorFor = (tool: Tool) => (tool === "highlight" ? "yellow" : "red");
+/** Shape path from a centre point and size, in base-canvas pixels. */
+const shapePath = (type: string, g: Geom): SkPath => {
+  "worklet";
+  const path = Skia.Path.Make();
+  const w = Math.abs(g.w);
+  const h = Math.abs(g.h);
+  const left = g.x - w / 2;
+  const top = g.y - h / 2;
+
+  if (type === "circle") {
+    // An oval rather than a strict circle so non-uniform resizing works.
+    path.addOval({ x: left, y: top, width: w, height: h });
+    return path;
+  }
+
+  if (type === "square") {
+    path.addRect({ x: left, y: top, width: w, height: h });
+    return path;
+  }
+
+  if (type === "triangle") {
+    path.moveTo(g.x, top);
+    path.lineTo(left + w, top + h);
+    path.lineTo(left, top + h);
+    path.close();
+    return path;
+  }
+
+  return path;
+};
+
+const distance = (ax: number, ay: number, bx: number, by: number) => {
+  "worklet";
+  const dx = ax - bx;
+  const dy = ay - by;
+  return Math.sqrt(dx * dx + dy * dy);
+};
+
+const newAnnotationId = () =>
+  `ann_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+/** Rounded to keep the serialised payload compact. */
+const round = (value: number) => Math.round(value * 10000) / 10000;
 
 export default function ImageAnnotationCanvas({
   imageUri,
   initialNote,
+  initialAnnotations,
   onSave,
   onCancel,
   onDelete,
 }: {
   imageUri: string;
   initialNote?: string;
-  onSave: (data: { fileUri: string; paths: any[]; notes: string }) => void;
+  initialAnnotations?: Annotation[];
+  onSave: (data: {
+    fileUri: string;
+    annotations: Annotation[];
+    /** @deprecated kept for callers that still read `paths`. */
+    paths: Annotation[];
+    notes: string;
+  }) => void;
   onCancel: () => void;
   onDelete?: () => void;
 }) {
@@ -120,32 +172,48 @@ export default function ImageAnnotationCanvas({
 
   const [fileUri, setFileUri] = useState<string | null>(null);
   const [prepareError, setPrepareError] = useState<string | null>(null);
-  const [tool, setTool] = useState<Tool>("pen");
-  const [strokes, setStrokes] = useState<Stroke[]>([]);
+  const [tool, setTool] = useState<AnnotationTool>("draw");
+  const [color, setColor] = useState(DEFAULT_ANNOTATION_COLOR);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [annotations, setAnnotations] = useState<Annotation[]>(
+    initialAnnotations ?? []
+  );
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notes, setNotes] = useState(initialNote || "");
   const [savingImage, setSavingImage] = useState(false);
 
   const canvasRef = useRef<React.ComponentRef<typeof Canvas>>(null);
 
-  // Live gesture state lives entirely in shared values so that drawing never
-  // triggers a React render. The previous implementation ran the gesture with
-  // `runOnJS(true)` and called `setCurrentPath(path.copy())` on every touch
-  // move, which meant a full re-render plus an O(n) path copy per event — the
-  // cause of the lag, which got worse the longer the stroke became.
+  // ----- Live interaction state -------------------------------------------
+  // Everything that changes per touch event lives in shared values, so drawing,
+  // moving, resizing, zooming and panning never trigger a React render. React
+  // state is written exactly once per completed gesture.
   const livePoints = useSharedValue<Point[]>([]);
-  const activeTool = useSharedValue<Tool>("pen");
-  const isDrawing = useSharedValue(false);
+  const activeTool = useSharedValue<AnnotationTool>("draw");
+  const activeColor = useSharedValue(DEFAULT_ANNOTATION_COLOR);
+  const mode = useSharedValue<DragMode>("none");
+  const startPoint = useSharedValue<Point>({ x: 0, y: 0 });
+  const originGeom = useSharedValue<Geom>(EMPTY_GEOM);
+  const previewGeom = useSharedValue<Geom>(EMPTY_GEOM);
   const didCommit = useSharedValue(false);
 
-  const selectTool = useCallback(
-    (next: Tool) => {
-      setTool(next);
-      activeTool.value = next;
-    },
-    [activeTool]
-  );
+  /** Geometry of the selected shape while it is selected, in base-canvas px. */
+  const selGeom = useSharedValue<Geom>(EMPTY_GEOM);
+  /** Shape type of the selection, or "" when nothing manipulable is selected. */
+  const selShape = useSharedValue("");
+  const selColor = useSharedValue(DEFAULT_ANNOTATION_COLOR);
+  const selStroke = useSharedValue(STROKE_PX);
 
-  // Convert a base64 data URI into a real file, which is what Skia can decode.
+  /** Image view transform: screen = base * scale + translate. */
+  const viewScale = useSharedValue(1);
+  const viewTx = useSharedValue(0);
+  const viewTy = useSharedValue(0);
+  const pinchStartScale = useSharedValue(1);
+
+  const canvasW = useSharedValue(1);
+  const canvasH = useSharedValue(1);
+
+  // Convert a base-canvas image URI into a real file for Skia to decode.
   useEffect(() => {
     let cancelled = false;
 
@@ -178,24 +246,29 @@ export default function ImageAnnotationCanvas({
 
   const image = useImage(fileUri);
 
+  const selectedAnnotation = useMemo(
+    () => annotations.find((a) => a.id === selectedId) ?? null,
+    [annotations, selectedId]
+  );
+
   /**
    * The canvas is sized to the photo's own aspect ratio, scaled to fit the space
-   * left between the toolbar and the notes field. Previously it was a hard-coded
-   * `width x 420` box with the image stretched to fill it, which distorted every
-   * photo and left drawable canvas area outside the picture.
-   *
-   * Sizing the canvas to exactly the fitted photo also means the saved snapshot
-   * is the photo and nothing else — no letterbox bars baked into the upload.
+   * between the bars. Because annotations are stored in normalised image
+   * coordinates, changing this size (rotation, palette opening, a different
+   * device) repositions nothing — the same fractions simply map onto a new box.
    */
   const canvasSize = useMemo(() => {
+    const chrome =
+      ACTION_BAR_HEIGHT +
+      TOOL_BAR_HEIGHT +
+      NOTES_HEIGHT +
+      (paletteOpen ? PALETTE_HEIGHT : 0) +
+      (selectedId ? SELECTION_BAR_HEIGHT : 0);
+
     const availableWidth = windowWidth;
     const availableHeight = Math.max(
-      220,
-      windowHeight -
-        insets.top -
-        insets.bottom -
-        TOOLBAR_HEIGHT -
-        NOTES_HEIGHT
+      200,
+      windowHeight - insets.top - insets.bottom - chrome
     );
 
     if (!image) {
@@ -211,85 +284,664 @@ export default function ImageAnnotationCanvas({
       width: Math.round(image.width() * scale),
       height: Math.round(image.height() * scale),
     };
-  }, [image, insets.bottom, insets.top, windowHeight, windowWidth]);
+  }, [
+    image,
+    insets.bottom,
+    insets.top,
+    paletteOpen,
+    selectedId,
+    windowHeight,
+    windowWidth,
+  ]);
 
-  /** Commits a finished stroke to React state. Runs once per stroke, not per
-   *  touch event. Kept dependency-free so the gesture can stay memoised. */
-  const commitStroke = useCallback((points: Point[], strokeTool: Tool) => {
-    if (points.length === 0) return;
-    setStrokes((prev) => [...prev, { type: strokeTool, path: buildPath(points, strokeTool) }]);
+  useEffect(() => {
+    canvasW.value = canvasSize.width;
+    canvasH.value = canvasSize.height;
+  }, [canvasSize, canvasW, canvasH]);
+
+  // ----- Normalised <-> base-canvas conversion ----------------------------
+
+  const toBaseGeom = useCallback(
+    (a: Annotation): Geom => ({
+      x: a.x * canvasSize.width,
+      y: a.y * canvasSize.height,
+      w: a.width * canvasSize.width,
+      h: a.height * canvasSize.height,
+    }),
+    [canvasSize]
+  );
+
+  const toNormalisedGeom = useCallback(
+    (g: Geom) => ({
+      x: round(g.x / canvasSize.width),
+      y: round(g.y / canvasSize.height),
+      width: round(Math.abs(g.w) / canvasSize.width),
+      height: round(Math.abs(g.h) / canvasSize.height),
+    }),
+    [canvasSize]
+  );
+
+  /** Keeps the shared values that render the selection in step with state. */
+  useEffect(() => {
+    if (!selectedAnnotation || !isShapeTool(selectedAnnotation.type)) {
+      selShape.value = "";
+      selGeom.value = EMPTY_GEOM;
+      return;
+    }
+    selShape.value = selectedAnnotation.type;
+    selGeom.value = toBaseGeom(selectedAnnotation);
+    selColor.value = selectedAnnotation.color;
+    selStroke.value = selectedAnnotation.strokeWidth * canvasSize.width;
+  }, [
+    canvasSize.width,
+    selColor,
+    selGeom,
+    selShape,
+    selStroke,
+    selectedAnnotation,
+    toBaseGeom,
+  ]);
+
+  const selectTool = useCallback(
+    (next: AnnotationTool) => {
+      setTool(next);
+      activeTool.value = next;
+      // Freehand and erase have no manipulable selection of their own; dropping
+      // it here stops stale resize handles hanging around after a tool change.
+      if (next === "draw" || next === "highlight" || next === "erase") {
+        setSelectedId(null);
+      }
+    },
+    [activeTool]
+  );
+
+  const applyColor = useCallback(
+    (next: string) => {
+      setColor(next);
+      activeColor.value = next;
+
+      // Only ever recolours an annotation the user explicitly selected.
+      if (selectedId) {
+        setAnnotations((prev) =>
+          prev.map((a) => (a.id === selectedId ? { ...a, color: next } : a))
+        );
+      }
+    },
+    [activeColor, selectedId]
+  );
+
+  // ----- Commit handlers (JS thread, once per gesture) --------------------
+
+  const commitFreehand = useCallback(
+    (points: Point[], strokeColor: string, strokePx: number, highlight: boolean) => {
+      if (points.length === 0) return;
+
+      let minX = points[0].x;
+      let maxX = points[0].x;
+      let minY = points[0].y;
+      let maxY = points[0].y;
+      for (const p of points) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+
+      const annotation: Annotation = {
+        id: newAnnotationId(),
+        type: highlight ? "highlight" : "draw",
+        color: strokeColor,
+        strokeWidth: round(strokePx / canvasSize.width),
+        x: round((minX + maxX) / 2 / canvasSize.width),
+        y: round((minY + maxY) / 2 / canvasSize.height),
+        width: round((maxX - minX) / canvasSize.width),
+        height: round((maxY - minY) / canvasSize.height),
+        rotation: 0,
+        points: points.map((p) => ({
+          x: round(p.x / canvasSize.width),
+          y: round(p.y / canvasSize.height),
+        })),
+      };
+
+      setAnnotations((prev) => [...prev, annotation]);
+    },
+    [canvasSize]
+  );
+
+  const commitShape = useCallback(
+    (geom: Geom, shape: string, shapeColor: string, select: boolean) => {
+      const normalised = toNormalisedGeom(geom);
+
+      const annotation: Annotation = {
+        id: newAnnotationId(),
+        type: shape as Annotation["type"],
+        color: shapeColor,
+        strokeWidth: round(STROKE_PX / canvasSize.width),
+        rotation: 0,
+        ...normalised,
+        // Clamped up rather than rejected: a short drag should still produce a
+        // usable shape the user can then resize, not silently nothing.
+        width: Math.max(MIN_SHAPE_SIZE, normalised.width),
+        height: Math.max(
+          (MIN_SHAPE_SIZE * canvasSize.width) / canvasSize.height,
+          normalised.height
+        ),
+      };
+
+      setAnnotations((prev) => [...prev, annotation]);
+      if (select) setSelectedId(annotation.id);
+    },
+    [canvasSize.height, canvasSize.width, toNormalisedGeom]
+  );
+
+  const commitSelectedGeom = useCallback(
+    (geom: Geom) => {
+      setAnnotations((prev) =>
+        prev.map((a) =>
+          a.id === selectedId ? { ...a, ...toNormalisedGeom(geom) } : a
+        )
+      );
+    },
+    [selectedId, toNormalisedGeom]
+  );
+
+  /**
+   * Hit test in normalised space, topmost (most recently added) first, so
+   * overlapping annotations resolve the way the user sees them stacked.
+   */
+  const hitTest = useCallback(
+    (nx: number, ny: number): Annotation | null => {
+      // Tolerance scales with zoom so the target stays a constant screen size.
+      const padX = (14 / viewScale.value) / canvasSize.width;
+      const padY = (14 / viewScale.value) / canvasSize.height;
+
+      for (let i = annotations.length - 1; i >= 0; i--) {
+        const a = annotations[i];
+
+        if (a.points && a.points.length > 0) {
+          // Separate x/y tolerances: normalised units are not the same size in
+          // pixels on both axes unless the photo happens to be square.
+          const reachX = Math.max(a.strokeWidth, padX);
+          const reachY = Math.max(
+            (a.strokeWidth * canvasSize.width) / canvasSize.height,
+            padY
+          );
+          const hit = a.points.some(
+            (p) => Math.abs(p.x - nx) <= reachX && Math.abs(p.y - ny) <= reachY
+          );
+          if (hit) return a;
+          continue;
+        }
+
+        const halfW = a.width / 2 + padX;
+        const halfH = a.height / 2 + padY;
+        if (
+          nx >= a.x - halfW &&
+          nx <= a.x + halfW &&
+          ny >= a.y - halfH &&
+          ny <= a.y + halfH
+        ) {
+          return a;
+        }
+      }
+      return null;
+    },
+    [annotations, canvasSize.height, canvasSize.width, viewScale]
+  );
+
+  const deleteAnnotation = useCallback((id: string) => {
+    setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    setSelectedId((current) => (current === id ? null : current));
+    console.log("Annotation deleted:", id);
   }, []);
 
-  const gesture = useMemo(
+  /**
+   * A tap that did not turn into a drag. Selects, places or erases depending on
+   * the active tool.
+   */
+  const handleTap = useCallback(
+    (baseX: number, baseY: number) => {
+      const nx = baseX / canvasSize.width;
+      const ny = baseY / canvasSize.height;
+      const hit = hitTest(nx, ny);
+
+      if (tool === "erase") {
+        if (hit) deleteAnnotation(hit.id);
+        else setSelectedId(null);
+        return;
+      }
+
+      // Tapping an existing annotation always selects it, whatever the tool —
+      // otherwise a shape tool could never reach an annotation underneath it.
+      if (hit) {
+        setSelectedId(hit.id);
+        return;
+      }
+
+      if (isShapeTool(tool)) {
+        // Tap-to-place: a small default shape, square on screen, auto-selected.
+        const width = DEFAULT_SHAPE_SIZE;
+        const height = (DEFAULT_SHAPE_SIZE * canvasSize.width) / canvasSize.height;
+        commitShape(
+          {
+            x: baseX,
+            y: baseY,
+            w: width * canvasSize.width,
+            h: height * canvasSize.height,
+          },
+          tool,
+          color,
+          true
+        );
+        return;
+      }
+
+      setSelectedId(null);
+    },
+    [
+      canvasSize.height,
+      canvasSize.width,
+      color,
+      commitShape,
+      deleteAnnotation,
+      hitTest,
+      tool,
+    ]
+  );
+
+  // ----- Gestures ---------------------------------------------------------
+
+  /** One finger: draw, move, resize, place or select. */
+  const drawGesture = useMemo(
     () =>
       Gesture.Pan()
-        // Pan waits ~10px before activating by default, so the start of every
-        // signature stroke was being swallowed and the pen felt unresponsive.
         .minDistance(0)
         .maxPointers(1)
         .averageTouches(true)
         .onBegin((e) => {
           "worklet";
-          isDrawing.value = true;
-          livePoints.value = [{ x: e.x, y: e.y }];
+          // Screen -> base canvas coordinates, undoing the zoom/pan transform.
+          const bx = (e.x - viewTx.value) / viewScale.value;
+          const by = (e.y - viewTy.value) / viewScale.value;
+
+          startPoint.value = { x: bx, y: by };
+          didCommit.value = false;
+
+          const t = activeTool.value;
+          const g = selGeom.value;
+
+          // A selected shape claims the touch first: its resize handle, then
+          // its body. This is what lets move/resize coexist with drawing.
+          if (selShape.value !== "") {
+            const handleX = g.x + Math.abs(g.w) / 2;
+            const handleY = g.y + Math.abs(g.h) / 2;
+            if (
+              distance(bx, by, handleX, handleY) <=
+              HANDLE_TOUCH_RADIUS / viewScale.value
+            ) {
+              mode.value = "resize";
+              originGeom.value = g;
+              return;
+            }
+
+            if (
+              Math.abs(bx - g.x) <= Math.abs(g.w) / 2 &&
+              Math.abs(by - g.y) <= Math.abs(g.h) / 2
+            ) {
+              mode.value = "move";
+              originGeom.value = g;
+              return;
+            }
+          }
+
+          if (t === "draw" || t === "highlight") {
+            mode.value = "draw";
+            livePoints.value = [{ x: bx, y: by }];
+            return;
+          }
+
+          // Shape and erase tools resolve on release: a tap places/erases, a
+          // drag draws the shape out to size.
+          mode.value = "pending";
         })
         .onUpdate((e) => {
           "worklet";
-          if (!isDrawing.value) return;
-          // `modify` mutates in place and still notifies dependents, avoiding
-          // a full array copy on every touch move.
-          livePoints.modify((points) => {
-            "worklet";
-            const last = points[points.length - 1];
-            if (
-              last &&
-              Math.abs(last.x - e.x) < MIN_POINT_DISTANCE &&
-              Math.abs(last.y - e.y) < MIN_POINT_DISTANCE
-            ) {
+          const bx = (e.x - viewTx.value) / viewScale.value;
+          const by = (e.y - viewTy.value) / viewScale.value;
+          const dx = bx - startPoint.value.x;
+          const dy = by - startPoint.value.y;
+
+          if (mode.value === "draw") {
+            livePoints.modify((points) => {
+              "worklet";
+              const last = points[points.length - 1];
+              if (
+                last &&
+                Math.abs(last.x - bx) < MIN_POINT_DISTANCE &&
+                Math.abs(last.y - by) < MIN_POINT_DISTANCE
+              ) {
+                return points;
+              }
+              points.push({ x: bx, y: by });
               return points;
-            }
-            points.push({ x: e.x, y: e.y });
-            return points;
-          });
+            });
+            return;
+          }
+
+          if (mode.value === "move") {
+            const o = originGeom.value;
+            selGeom.value = { x: o.x + dx, y: o.y + dy, w: o.w, h: o.h };
+            return;
+          }
+
+          if (mode.value === "resize") {
+            const o = originGeom.value;
+            const minW = MIN_SHAPE_SIZE * canvasW.value;
+            const minH = MIN_SHAPE_SIZE * canvasW.value;
+            // Resizes about the centre, so the shape does not creep as it grows.
+            selGeom.value = {
+              x: o.x,
+              y: o.y,
+              w: Math.max(minW, Math.abs(o.w) + dx * 2),
+              h: Math.max(minH, Math.abs(o.h) + dy * 2),
+            };
+            return;
+          }
+
+          if (
+            (mode.value === "pending" || mode.value === "create") &&
+            activeTool.value !== "erase" &&
+            distance(bx, by, startPoint.value.x, startPoint.value.y) > TAP_SLOP
+          ) {
+            mode.value = "create";
+            previewGeom.value = {
+              x: (startPoint.value.x + bx) / 2,
+              y: (startPoint.value.y + by) / 2,
+              w: Math.abs(dx),
+              h: Math.abs(dy),
+            };
+          }
         })
-        .onEnd(() => {
+        .onEnd((_e, success) => {
           "worklet";
-          if (!isDrawing.value) return;
+          // `success` is false when the gesture was cancelled — most commonly
+          // because a second finger landed to start a pinch. Committing then
+          // would leave a stray dot or a half-dragged shape behind.
+          if (!success) return;
+
+          const t = activeTool.value;
           didCommit.value = true;
-          runOnJS(commitStroke)(livePoints.value, activeTool.value);
+
+          if (mode.value === "draw") {
+            scheduleOnRN(
+              commitFreehand,
+              livePoints.value,
+              activeColor.value,
+              t === "highlight" ? HIGHLIGHT_STROKE_PX : STROKE_PX,
+              t === "highlight"
+            );
+            return;
+          }
+
+          if (mode.value === "move" || mode.value === "resize") {
+            scheduleOnRN(commitSelectedGeom, selGeom.value);
+            return;
+          }
+
+          if (mode.value === "create") {
+            scheduleOnRN(
+              commitShape,
+              previewGeom.value,
+              t,
+              activeColor.value,
+              true
+            );
+            return;
+          }
+
+          if (mode.value === "pending") {
+            scheduleOnRN(handleTap, startPoint.value.x, startPoint.value.y);
+          }
         })
         .onFinalize(() => {
           "worklet";
-          isDrawing.value = false;
-          // On a committed stroke the live preview is cleared from the effect
-          // below, once React has actually painted the committed stroke —
-          // clearing it here would blank the stroke for a frame or two. A
-          // cancelled gesture never commits, so it is discarded immediately.
           if (!didCommit.value) livePoints.value = [];
+          mode.value = "none";
+          previewGeom.value = EMPTY_GEOM;
           didCommit.value = false;
         }),
-    [activeTool, commitStroke, didCommit, isDrawing, livePoints]
+    [
+      activeColor,
+      activeTool,
+      canvasW,
+      commitFreehand,
+      commitSelectedGeom,
+      commitShape,
+      didCommit,
+      handleTap,
+      livePoints,
+      mode,
+      originGeom,
+      previewGeom,
+      selGeom,
+      selShape,
+      startPoint,
+      viewScale,
+      viewTx,
+      viewTy,
+    ]
   );
 
-  // Hand off from the live (UI-thread) preview to the committed stroke without
-  // a visible gap. Skipped mid-stroke so a fast next stroke is not wiped.
-  useEffect(() => {
-    if (!isDrawing.value) livePoints.value = [];
-  }, [strokes, isDrawing, livePoints]);
+  /** Keeps the zoomed image from being dragged off screen. */
+  const clampTranslation = useCallback(() => {
+    "worklet";
+    const maxX = 0;
+    const minX = canvasW.value * (1 - viewScale.value);
+    const maxY = 0;
+    const minY = canvasH.value * (1 - viewScale.value);
+    viewTx.value = Math.min(maxX, Math.max(minX, viewTx.value));
+    viewTy.value = Math.min(maxY, Math.max(minY, viewTy.value));
+  }, [canvasH, canvasW, viewScale, viewTx, viewTy]);
 
-  // Rebuilt on the UI thread each frame while drawing; empty the rest of the time.
-  const livePath = useDerivedValue(() =>
-    buildPath(livePoints.value, activeTool.value)
+  /** Two fingers: pinch to zoom the image about the focal point. */
+  const pinchGesture = useMemo(
+    () =>
+      Gesture.Pinch()
+        .onBegin(() => {
+          "worklet";
+          pinchStartScale.value = viewScale.value;
+        })
+        .onUpdate((e) => {
+          "worklet";
+          const next = Math.min(
+            MAX_ZOOM,
+            Math.max(1, pinchStartScale.value * e.scale)
+          );
+          // Hold the point under the fingers still while scaling.
+          const ratio = next / viewScale.value;
+          viewTx.value = e.focalX - (e.focalX - viewTx.value) * ratio;
+          viewTy.value = e.focalY - (e.focalY - viewTy.value) * ratio;
+          viewScale.value = next;
+          clampTranslation();
+        })
+        .onEnd(() => {
+          "worklet";
+          if (viewScale.value <= 1.01) {
+            viewScale.value = 1;
+            viewTx.value = 0;
+            viewTy.value = 0;
+          }
+        }),
+    [clampTranslation, pinchStartScale, viewScale, viewTx, viewTy]
   );
+
+  /** Two fingers: pan the zoomed image. Never competes with one-finger drawing. */
+  const viewPanGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .minPointers(2)
+        .onChange((e) => {
+          "worklet";
+          viewTx.value += e.changeX;
+          viewTy.value += e.changeY;
+          clampTranslation();
+        }),
+    [clampTranslation, viewTx, viewTy]
+  );
+
+  const gesture = useMemo(
+    () =>
+      Gesture.Simultaneous(
+        Gesture.Simultaneous(pinchGesture, viewPanGesture),
+        drawGesture
+      ),
+    [drawGesture, pinchGesture, viewPanGesture]
+  );
+
+  // ----- Derived (UI-thread) render values --------------------------------
+
+  const viewTransform = useDerivedValue(() => [
+    { translateX: viewTx.value },
+    { translateY: viewTy.value },
+    { scale: viewScale.value },
+  ]);
+
+  /** The in-progress freehand stroke or shape preview. */
+  const livePath = useDerivedValue(() => {
+    if (mode.value === "draw") return freehandPath(livePoints.value);
+    if (mode.value === "create") {
+      return shapePath(activeTool.value, previewGeom.value);
+    }
+    return Skia.Path.Make();
+  });
+
   const liveStrokeWidth = useDerivedValue(() =>
-    activeTool.value === "highlight" ? 12 : 3
+    activeTool.value === "highlight" ? HIGHLIGHT_STROKE_PX : STROKE_PX
   );
-  const liveColor = useDerivedValue(() =>
-    activeTool.value === "highlight" ? "yellow" : "red"
+  const liveOpacity = useDerivedValue(() =>
+    activeTool.value === "highlight" && mode.value === "draw" ? 0.45 : 1
   );
+
+  /** The selected shape, driven by shared values so dragging never re-renders. */
+  const selectedPath = useDerivedValue(() =>
+    selShape.value === ""
+      ? Skia.Path.Make()
+      : shapePath(selShape.value, selGeom.value)
+  );
+
+  /** Dashed bounding box around the selected shape. */
+  const selectionBoxPath = useDerivedValue(() => {
+    const path = Skia.Path.Make();
+    if (selShape.value === "") return path;
+    const g = selGeom.value;
+    const pad = 6 / viewScale.value;
+    path.addRect({
+      x: g.x - Math.abs(g.w) / 2 - pad,
+      y: g.y - Math.abs(g.h) / 2 - pad,
+      width: Math.abs(g.w) + pad * 2,
+      height: Math.abs(g.h) + pad * 2,
+    });
+    return path;
+  });
+
+  /** Resize handle, kept a constant on-screen size regardless of zoom. */
+  const handlePath = useDerivedValue(() => {
+    const path = Skia.Path.Make();
+    if (selShape.value === "") return path;
+    const g = selGeom.value;
+    path.addCircle(
+      g.x + Math.abs(g.w) / 2,
+      g.y + Math.abs(g.h) / 2,
+      HANDLE_RADIUS / viewScale.value
+    );
+    return path;
+  });
+
+  const selectionStrokeWidth = useDerivedValue(() => 1.5 / viewScale.value);
+
+  /**
+   * Freehand strokes are selectable (to recolour or delete) but not movable or
+   * resizable, so their selection outline is static and can come from state.
+   */
+  const freehandSelectionBox = useMemo(() => {
+    if (!selectedAnnotation || isShapeTool(selectedAnnotation.type)) return null;
+
+    const path = Skia.Path.Make();
+    const width = Math.max(selectedAnnotation.width * canvasSize.width, 10);
+    const height = Math.max(selectedAnnotation.height * canvasSize.height, 10);
+    path.addRect({
+      x: selectedAnnotation.x * canvasSize.width - width / 2 - 6,
+      y: selectedAnnotation.y * canvasSize.height - height / 2 - 6,
+      width: width + 12,
+      height: height + 12,
+    });
+    return path;
+  }, [canvasSize.height, canvasSize.width, selectedAnnotation]);
+
+  // Hand off from the live preview to the committed annotation without a gap.
+  useEffect(() => {
+    if (mode.value === "none") livePoints.value = [];
+  }, [annotations, livePoints, mode]);
+
+  /**
+   * Committed annotations, converted from normalised coordinates into
+   * base-canvas paths. Rebuilt only when the annotation list or the canvas size
+   * changes — never while drawing.
+   */
+  /**
+   * The selected shape is drawn from shared values instead of from state, so
+   * that dragging and resizing it needs no React render. It is therefore
+   * excluded here to avoid drawing it twice.
+   */
+  const liveSelectedId =
+    selectedAnnotation && isShapeTool(selectedAnnotation.type)
+      ? selectedAnnotation.id
+      : null;
+
+  const renderedAnnotations = useMemo(
+    () =>
+      annotations
+        .filter((a) => a.id !== liveSelectedId)
+        .map((a) => {
+        const geom: Geom = {
+          x: a.x * canvasSize.width,
+          y: a.y * canvasSize.height,
+          w: a.width * canvasSize.width,
+          h: a.height * canvasSize.height,
+        };
+
+        return {
+          id: a.id,
+          type: a.type,
+          color: a.color,
+          strokeWidth: Math.max(1, a.strokeWidth * canvasSize.width),
+          opacity: a.type === "highlight" ? 0.45 : 1,
+          path: a.points
+            ? freehandPath(
+                a.points.map((p) => ({
+                  x: p.x * canvasSize.width,
+                  y: p.y * canvasSize.height,
+                }))
+              )
+            : shapePath(a.type, geom),
+        };
+      }),
+    [annotations, canvasSize.height, canvasSize.width, liveSelectedId]
+  );
+
+  // ----- Actions ----------------------------------------------------------
 
   const handleUndo = () => {
-    setStrokes((prev) => prev.slice(0, -1));
+    if (annotations.length === 0) return;
+
+    const last = annotations[annotations.length - 1];
+    if (selectedId === last.id) setSelectedId(null);
+    setAnnotations((prev) => prev.slice(0, -1));
+  };
+
+  const handleClearAll = () => {
+    setAnnotations([]);
+    setSelectedId(null);
   };
 
   const handleSaveImage = async () => {
@@ -301,13 +953,24 @@ export default function ImageAnnotationCanvas({
         throw new Error("Canvas is not ready yet");
       }
 
+      // Reset zoom and drop the selection first: the snapshot captures exactly
+      // what is on the canvas, so a zoomed view or a visible selection box and
+      // resize handle would otherwise be baked into the saved photo.
+      setSelectedId(null);
+      viewScale.value = 1;
+      viewTx.value = 0;
+      viewTy.value = 0;
+
+      // Two frames: one for React to commit the cleared selection, one for
+      // Skia to paint it.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+
       const snapshot = canvasRef.current.makeImageSnapshot();
 
-      // Encode as JPEG, not PNG. A lossless full-canvas PNG snapshot runs to
-      // several megabytes per photo, which is slow to upload and large enough
-      // to be rejected outright by a default server body-size limit (nginx
-      // caps request bodies at 1 MB out of the box). JPEG at quality 80 is
-      // visually equivalent here and typically 10-20x smaller.
+      // JPEG, not PNG: a lossless full-canvas snapshot runs to several MB per
+      // photo, large enough to be refused by a default server body-size limit.
       const base64 = snapshot.encodeToBase64(ImageFormat.JPEG, 80);
 
       const filePath = `${FileSystem.cacheDirectory}annotated_${Date.now()}.jpg`;
@@ -315,23 +978,29 @@ export default function ImageAnnotationCanvas({
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      // Confirm the file landed before handing the path to the uploader —
-      // a silently-missing file surfaces later as an opaque upload failure.
       const info = await FileSystem.getInfoAsync(filePath);
       if (!info.exists) {
         throw new Error("Annotated image could not be saved to disk");
       }
 
       console.log("Annotated image saved:", filePath, {
-        strokes: strokes.length,
+        annotations: annotations.length,
         bytes: info.size,
       });
-      onSave({ fileUri: filePath, paths: strokes, notes });
+
+      onSave({
+        fileUri: filePath,
+        annotations,
+        paths: annotations,
+        notes,
+      });
     } catch (err) {
       console.log("SAVE ERROR:", err);
       setSavingImage(false);
     }
   };
+
+  // ----- Render -----------------------------------------------------------
 
   if (prepareError) {
     return (
@@ -353,127 +1022,242 @@ export default function ImageAnnotationCanvas({
     );
   }
 
-  const toolButtons: { tool: Tool; icon: keyof typeof Ionicons.glyphMap }[] = [
-    { tool: "pen", icon: "brush" },
-    { tool: "rect", icon: "square-outline" },
-    { tool: "circle", icon: "ellipse-outline" },
-    { tool: "highlight", icon: "color-fill-outline" },
+  const tools: {
+    tool: AnnotationTool;
+    icon: keyof typeof Ionicons.glyphMap;
+    label: string;
+  }[] = [
+    { tool: "draw", icon: "brush", label: "Draw" },
+    { tool: "highlight", icon: "color-fill-outline", label: "Highlight" },
+    { tool: "circle", icon: "ellipse-outline", label: "Circle" },
+    { tool: "square", icon: "square-outline", label: "Square" },
+    { tool: "triangle", icon: "triangle-outline", label: "Triangle" },
+    { tool: "erase", icon: "backspace-outline", label: "Erase" },
   ];
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* The inset is applied as padding on the toolbar itself rather than via
-          <SafeAreaView>, which reports no insets inside a Modal on iOS and let
-          the tool icons slide under the status bar / notch. */}
-      <View style={[styles.toolbar, { paddingTop: insets.top + 8 }]}>
-        {toolButtons.map((item) => (
-          <TouchableOpacity
-            key={item.tool}
-            onPress={() => selectTool(item.tool)}
-            style={[styles.toolButton, tool === item.tool && styles.toolActive]}
-            accessibilityLabel={item.tool}
-          >
-            <Ionicons
-              name={item.icon}
-              size={22}
-              color={tool === item.tool ? "#111" : "#fff"}
-            />
-          </TouchableOpacity>
-        ))}
-
-        <TouchableOpacity
-          onPress={handleUndo}
-          disabled={strokes.length === 0}
-          style={[styles.toolButton, strokes.length === 0 && styles.disabled]}
-          accessibilityLabel="Undo"
-        >
-          <Ionicons name="arrow-undo" size={22} color="#fff" />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          onPress={() => setStrokes([])}
-          disabled={strokes.length === 0}
-          style={[styles.toolButton, strokes.length === 0 && styles.disabled]}
-          accessibilityLabel="Clear drawing"
-        >
-          <Ionicons name="refresh" size={22} color="#fff" />
-        </TouchableOpacity>
-
-        {onDelete && (
-          <TouchableOpacity
-            onPress={onDelete}
-            style={styles.toolButton}
-            accessibilityLabel="Delete photo"
-          >
-            <Ionicons name="trash" size={22} color="red" />
-          </TouchableOpacity>
-        )}
-
+      {/* Action bar. The safe-area inset is applied here as padding because
+          <SafeAreaView> reports no insets inside a Modal on iOS. */}
+      <View style={[styles.actionBar, { paddingTop: insets.top + 8 }]}>
         <TouchableOpacity
           onPress={onCancel}
-          style={styles.toolButton}
+          style={styles.actionButton}
           accessibilityLabel="Cancel"
         >
           <Ionicons name="close" size={26} color="#fff" />
         </TouchableOpacity>
 
+        <View style={styles.actionGroup}>
+          <TouchableOpacity
+            onPress={handleUndo}
+            disabled={annotations.length === 0}
+            style={[
+              styles.actionButton,
+              annotations.length === 0 && styles.disabled,
+            ]}
+            accessibilityLabel="Undo"
+          >
+            <Ionicons name="arrow-undo" size={22} color="#fff" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleClearAll}
+            disabled={annotations.length === 0}
+            style={[
+              styles.actionButton,
+              annotations.length === 0 && styles.disabled,
+            ]}
+            accessibilityLabel="Clear all annotations"
+          >
+            <Ionicons name="refresh" size={22} color="#fff" />
+          </TouchableOpacity>
+
+          {onDelete && (
+            <TouchableOpacity
+              onPress={onDelete}
+              style={styles.actionButton}
+              accessibilityLabel="Delete photo"
+            >
+              <Ionicons name="trash" size={22} color="#f87171" />
+            </TouchableOpacity>
+          )}
+        </View>
+
         <TouchableOpacity
           onPress={handleSaveImage}
           disabled={savingImage}
-          style={[styles.toolButton, savingImage && styles.disabled]}
+          style={[styles.actionButton, savingImage && styles.disabled]}
           accessibilityLabel="Save"
         >
           {savingImage ? (
-            <ActivityIndicator size="small" color="green" />
+            <ActivityIndicator size="small" color="#4ade80" />
           ) : (
-            <Ionicons name="checkmark" size={26} color="green" />
+            <Ionicons name="checkmark" size={28} color="#4ade80" />
           )}
         </TouchableOpacity>
       </View>
 
-      {/* Centred in the space between the toolbar and the notes field so the
-          photo is never clipped and never stretched. */}
       <View style={styles.canvasArea}>
         <GestureDetector gesture={gesture}>
           <Canvas ref={canvasRef} style={canvasSize}>
-            <SkiaImage
-              image={image}
-              x={0}
-              y={0}
-              width={canvasSize.width}
-              height={canvasSize.height}
-            />
+            {/* Everything is inside the same transform, so annotations stay
+                anchored to the image through zoom and pan. */}
+            <Group transform={viewTransform}>
+              <SkiaImage
+                image={image}
+                x={0}
+                y={0}
+                width={canvasSize.width}
+                height={canvasSize.height}
+              />
 
-            {strokes.map((item, i) => (
+              {renderedAnnotations.map((a) => (
+                <Path
+                  key={a.id}
+                  path={a.path}
+                  style="stroke"
+                  strokeWidth={a.strokeWidth}
+                  strokeCap="round"
+                  strokeJoin="round"
+                  color={a.color}
+                  opacity={a.opacity}
+                />
+              ))}
+
               <Path
-                key={i}
-                path={item.path}
+                path={selectedPath}
                 style="stroke"
-                strokeWidth={strokeWidthFor(item.type)}
+                strokeWidth={selStroke}
                 strokeCap="round"
                 strokeJoin="round"
-                color={colorFor(item.type)}
+                color={selColor}
               />
-            ))}
 
-            <Path
-              path={livePath}
-              style="stroke"
-              strokeWidth={liveStrokeWidth}
-              strokeCap="round"
-              strokeJoin="round"
-              color={liveColor}
-            />
+              <Path
+                path={livePath}
+                style="stroke"
+                strokeWidth={liveStrokeWidth}
+                strokeCap="round"
+                strokeJoin="round"
+                color={activeColor}
+                opacity={liveOpacity}
+              />
+
+              <Path
+                path={selectionBoxPath}
+                style="stroke"
+                strokeWidth={selectionStrokeWidth}
+                color="#38bdf8"
+              />
+              <Path path={handlePath} color="#38bdf8" />
+
+              {freehandSelectionBox && (
+                <Path
+                  path={freehandSelectionBox}
+                  style="stroke"
+                  strokeWidth={selectionStrokeWidth}
+                  color="#38bdf8"
+                />
+              )}
+            </Group>
           </Canvas>
         </GestureDetector>
+      </View>
+
+      {selectedAnnotation && (
+        <View style={styles.selectionBar}>
+          <Text style={styles.selectionText}>
+            {selectedAnnotation.type === "draw"
+              ? "Freehand"
+              : selectedAnnotation.type === "highlight"
+              ? "Highlight"
+              : selectedAnnotation.type.charAt(0).toUpperCase() +
+                selectedAnnotation.type.slice(1)}{" "}
+            selected
+          </Text>
+
+          <View style={styles.actionGroup}>
+            <TouchableOpacity
+              onPress={() => setSelectedId(null)}
+              style={styles.selectionButton}
+              accessibilityLabel="Deselect"
+            >
+              <Text style={styles.selectionButtonText}>Deselect</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => deleteAnnotation(selectedAnnotation.id)}
+              style={[styles.selectionButton, styles.selectionDelete]}
+              accessibilityLabel="Delete selected annotation"
+            >
+              <Ionicons name="trash" size={16} color="#fff" />
+              <Text style={styles.selectionButtonText}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {paletteOpen && (
+        <View style={styles.palette}>
+          {PALETTE.map((swatch) => (
+            <TouchableOpacity
+              key={swatch}
+              onPress={() => applyColor(swatch)}
+              style={[
+                styles.swatch,
+                { backgroundColor: swatch },
+                color === swatch && styles.swatchActive,
+              ]}
+              accessibilityLabel={`Colour ${swatch}`}
+            />
+          ))}
+        </View>
+      )}
+
+      <View style={styles.toolBar}>
+        {tools.map((item) => {
+          const active = tool === item.tool;
+          return (
+            <TouchableOpacity
+              key={item.tool}
+              onPress={() => selectTool(item.tool)}
+              style={[styles.toolButton, active && styles.toolButtonActive]}
+              accessibilityLabel={item.label}
+              accessibilityState={{ selected: active }}
+            >
+              <Ionicons
+                name={item.icon}
+                size={20}
+                color={active ? "#0b1220" : "#e5e7eb"}
+              />
+              <Text style={[styles.toolLabel, active && styles.toolLabelActive]}>
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+
+        <TouchableOpacity
+          onPress={() => setPaletteOpen((open) => !open)}
+          style={[styles.toolButton, paletteOpen && styles.toolButtonActive]}
+          accessibilityLabel="Colour"
+        >
+          <View style={[styles.colorPreview, { backgroundColor: color }]} />
+          <Text
+            style={[styles.toolLabel, paletteOpen && styles.toolLabelActive]}
+          >
+            Color
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Bottom inset keeps the field clear of the iOS home indicator and the
           Android gesture bar. */}
       <View style={[styles.notes, { paddingBottom: insets.bottom + 12 }]}>
-        <Text style={{ color: "#fff" }}>Image Notes</Text>
+        <Text style={styles.notesLabel}>Image Notes</Text>
         <TextInput
           value={notes}
           onChangeText={setNotes}
@@ -489,32 +1273,106 @@ export default function ImageAnnotationCanvas({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#000" },
-  toolbar: {
+  actionBar: {
     flexDirection: "row",
-    // space-between + horizontal padding keeps all nine controls on one row even
-    // on a narrow Android device, where space-around overflowed.
-    justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 6,
+    justifyContent: "space-between",
+    paddingHorizontal: 10,
     paddingBottom: 8,
     backgroundColor: "#111",
   },
-  toolButton: {
-    padding: 6,
-    borderRadius: 8,
+  actionGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
   },
+  actionButton: {
+    padding: 8,
+    borderRadius: 8,
+    minWidth: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  disabled: { opacity: 0.35 },
   canvasArea: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
   },
-  toolActive: {
-    backgroundColor: "#fff",
+  selectionBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: "#0b1220",
+    borderTopWidth: 1,
+    borderTopColor: "#1e293b",
   },
-  disabled: {
-    opacity: 0.4,
+  selectionText: { color: "#93c5fd", fontSize: 13, fontWeight: "600" },
+  selectionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: "#1e293b",
   },
-  notes: { paddingHorizontal: 12, paddingTop: 12 },
+  selectionDelete: { backgroundColor: "#b91c1c" },
+  selectionButtonText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  palette: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-around",
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    backgroundColor: "#0b1220",
+  },
+  swatch: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  swatchActive: {
+    borderColor: "#fff",
+    transform: [{ scale: 1.15 }],
+  },
+  toolBar: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    justifyContent: "space-between",
+    paddingHorizontal: 4,
+    paddingVertical: 6,
+    backgroundColor: "#111",
+  },
+  toolButton: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+    paddingVertical: 6,
+    marginHorizontal: 2,
+    borderRadius: 10,
+    // A generous touch target even though the buttons are visually compact.
+    minHeight: 44,
+  },
+  toolButtonActive: {
+    backgroundColor: "#f8fafc",
+  },
+  toolLabel: { color: "#9ca3af", fontSize: 9, fontWeight: "600" },
+  toolLabelActive: { color: "#0b1220" },
+  colorPreview: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#e5e7eb",
+  },
+  notes: { paddingHorizontal: 12, paddingTop: 10 },
+  notesLabel: { color: "#fff", fontSize: 13 },
   input: {
     borderWidth: 1,
     borderColor: "#444",
@@ -522,7 +1380,7 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 8,
     marginTop: 6,
-    minHeight: 76,
+    minHeight: 70,
     textAlignVertical: "top",
   },
   loader: {

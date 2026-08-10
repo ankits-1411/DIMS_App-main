@@ -22,6 +22,7 @@ import {
 } from "react-native-safe-area-context";
 import { useTheme } from "../context/ThemeContext";
 import { inspectionsAPI } from "../services/api";
+import { Annotation } from "../types/annotations";
 import ImageAnnotationCanvas from "./ImageAnnotationCanvas";
 
 const { width } = Dimensions.get("window");
@@ -37,6 +38,12 @@ type StagedPhoto = {
   id: string;
   uri: string;
   note: string;
+  /** Structured annotation data, submitted alongside the flattened image so the
+   *  annotations remain editable/recreatable rather than only pixels. */
+  annotations: Annotation[];
+  /** The un-annotated original, so re-opening the editor does not stack
+   *  annotations on top of an image they have already been burnt into. */
+  sourceUri: string;
 };
 
 /** The photo currently open in the annotation canvas. `id` is null for a
@@ -45,6 +52,7 @@ type EditingPhoto = {
   id: string | null;
   uri: string;
   note: string;
+  annotations: Annotation[];
 };
 
 type UploadStage = "idle" | "checking" | "uploading" | "completing";
@@ -226,7 +234,12 @@ export default function ImageUploadComponent({
 
       if (result.canceled || !result.assets?.[0]?.uri) return;
 
-      openForEditing({ id: null, uri: result.assets[0].uri, note: "" });
+      openForEditing({
+        id: null,
+        uri: result.assets[0].uri,
+        note: "",
+        annotations: [],
+      });
     } catch (error) {
       console.log("Take photo error:", error);
       Alert.alert("Camera error", "Failed to open the camera. Please try again.");
@@ -252,7 +265,12 @@ export default function ImageUploadComponent({
 
       if (result.canceled || !result.assets?.[0]?.uri) return;
 
-      openForEditing({ id: null, uri: result.assets[0].uri, note: "" });
+      openForEditing({
+        id: null,
+        uri: result.assets[0].uri,
+        note: "",
+        annotations: [],
+      });
     } catch (error) {
       console.log("Pick image error:", error);
       Alert.alert(
@@ -515,13 +533,24 @@ export default function ImageUploadComponent({
       }
 
       const formData = new FormData();
-      const imageMeta: { filename: string; note: string }[] = [];
+      const imageMeta: {
+        filename: string;
+        note: string;
+        annotations: Annotation[];
+      }[] = [];
 
       usable.forEach((img, index) => {
         const { name, type } = describeFile(img.uri, index);
 
         formData.append("photos", { uri: img.uri, name, type } as any);
-        imageMeta.push({ filename: name, note: img.note || "" });
+        // The uploaded file already has the annotations drawn into it; the
+        // structured data goes along so they stay recreatable and editable
+        // rather than existing only as pixels.
+        imageMeta.push({
+          filename: name,
+          note: img.note || "",
+          annotations: img.annotations ?? [],
+        });
       });
 
       formData.append("imageMeta", JSON.stringify(imageMeta));
@@ -652,10 +681,14 @@ export default function ImageUploadComponent({
             <TouchableOpacity
               disabled={saving}
               onPress={() =>
+                // Re-opens the *original* photo plus its stored annotations, so
+                // existing annotations stay editable instead of being flattened
+                // pixels that new annotations get drawn on top of.
                 openForEditing({
                   id: photo.id,
-                  uri: photo.uri,
+                  uri: photo.sourceUri,
                   note: photo.note,
+                  annotations: photo.annotations,
                 })
               }
             >
@@ -779,6 +812,7 @@ export default function ImageUploadComponent({
               <ImageAnnotationCanvas
                 imageUri={editing.uri}
                 initialNote={editing.note}
+                initialAnnotations={editing.annotations}
                 onCancel={() => setEditing(null)}
                 onDelete={
                   editing.id
@@ -791,19 +825,34 @@ export default function ImageUploadComponent({
                 }
                 onSave={(data) => {
                   const editedId = editing.id;
+                  // `editing.uri` is the un-annotated original; `data.fileUri`
+                  // is the flattened image that gets uploaded.
+                  const sourceUri = editing.uri;
 
                   setImages((prev) => {
                     if (editedId) {
                       // Match on id — the entry may have moved since it opened.
                       return prev.map((img) =>
                         img.id === editedId
-                          ? { ...img, uri: data.fileUri, note: data.notes }
+                          ? {
+                              ...img,
+                              uri: data.fileUri,
+                              note: data.notes,
+                              annotations: data.annotations,
+                              sourceUri,
+                            }
                           : img
                       );
                     }
                     return [
                       ...prev,
-                      { id: newId(), uri: data.fileUri, note: data.notes },
+                      {
+                        id: newId(),
+                        uri: data.fileUri,
+                        note: data.notes,
+                        annotations: data.annotations,
+                        sourceUri,
+                      },
                     ];
                   });
 
