@@ -184,6 +184,29 @@ export default function ImageAnnotationCanvas({
   const [savingImage, setSavingImage] = useState(false);
 
   const canvasRef = useRef<React.ComponentRef<typeof Canvas>>(null);
+  const annotationsRef = useRef(annotations);
+  const historyRef = useRef<{ past: Annotation[][]; future: Annotation[][] }>({
+    past: [],
+    future: [],
+  });
+  annotationsRef.current = annotations;
+
+  const commitAnnotations = useCallback(
+    (next: Annotation[] | ((current: Annotation[]) => Annotation[])) => {
+      const previous = annotationsRef.current;
+      const value = typeof next === "function" ? next(previous) : next;
+      if (value === previous) return;
+
+      historyRef.current.past = [
+        ...historyRef.current.past.slice(-99),
+        previous,
+      ];
+      historyRef.current.future = [];
+      annotationsRef.current = value;
+      setAnnotations(value);
+    },
+    []
+  );
 
   // ----- Live interaction state -------------------------------------------
   // Everything that changes per touch event lives in shared values, so drawing,
@@ -363,12 +386,12 @@ export default function ImageAnnotationCanvas({
 
       // Only ever recolours an annotation the user explicitly selected.
       if (selectedId) {
-        setAnnotations((prev) =>
+        commitAnnotations((prev) =>
           prev.map((a) => (a.id === selectedId ? { ...a, color: next } : a))
         );
       }
     },
-    [activeColor, selectedId]
+    [activeColor, commitAnnotations, selectedId]
   );
 
   // ----- Commit handlers (JS thread, once per gesture) --------------------
@@ -404,9 +427,9 @@ export default function ImageAnnotationCanvas({
         })),
       };
 
-      setAnnotations((prev) => [...prev, annotation]);
+      commitAnnotations((prev) => [...prev, annotation]);
     },
-    [canvasSize]
+    [canvasSize, commitAnnotations]
   );
 
   const commitShape = useCallback(
@@ -429,21 +452,21 @@ export default function ImageAnnotationCanvas({
         ),
       };
 
-      setAnnotations((prev) => [...prev, annotation]);
+      commitAnnotations((prev) => [...prev, annotation]);
       if (select) setSelectedId(annotation.id);
     },
-    [canvasSize.height, canvasSize.width, toNormalisedGeom]
+    [canvasSize.height, canvasSize.width, commitAnnotations, toNormalisedGeom]
   );
 
   const commitSelectedGeom = useCallback(
     (geom: Geom) => {
-      setAnnotations((prev) =>
+      commitAnnotations((prev) =>
         prev.map((a) =>
           a.id === selectedId ? { ...a, ...toNormalisedGeom(geom) } : a
         )
       );
     },
-    [selectedId, toNormalisedGeom]
+    [commitAnnotations, selectedId, toNormalisedGeom]
   );
 
   /**
@@ -491,18 +514,17 @@ export default function ImageAnnotationCanvas({
   );
 
   const deleteAnnotation = useCallback((id: string) => {
-    setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    commitAnnotations((prev) => prev.filter((a) => a.id !== id));
     setSelectedId((current) => (current === id ? null : current));
-    console.log("Annotation deleted:", id);
-  }, []);
+  }, [commitAnnotations]);
 
   const handleClone = useCallback(() => {
     if (!selectedId) return;
     const cloned = cloneAnnotation(annotations, selectedId);
     if (!cloned) return;
-    setAnnotations((prev) => [...prev, cloned]);
+    commitAnnotations((prev) => [...prev, cloned]);
     setSelectedId(cloned.id);
-  }, [annotations, selectedId]);
+  }, [annotations, commitAnnotations, selectedId]);
 
   /**
    * A tap that did not turn into a drag. Selects, places or erases depending on
@@ -940,16 +962,30 @@ export default function ImageAnnotationCanvas({
 
   // ----- Actions ----------------------------------------------------------
 
-  const handleUndo = () => {
-    if (annotations.length === 0) return;
+  const applyHistory = (direction: "undo" | "redo") => {
+    const from = direction === "undo" ? "past" : "future";
+    const to = direction === "undo" ? "future" : "past";
+    const stack = historyRef.current[from];
+    if (stack.length === 0) return;
 
-    const last = annotations[annotations.length - 1];
-    if (selectedId === last.id) setSelectedId(null);
-    setAnnotations((prev) => prev.slice(0, -1));
+    const value = direction === "undo" ? stack[stack.length - 1] : stack[0];
+    historyRef.current[from] =
+      direction === "undo" ? stack.slice(0, -1) : stack.slice(1);
+    historyRef.current[to] =
+      direction === "undo"
+        ? [...historyRef.current[to], annotationsRef.current]
+        : [annotationsRef.current, ...historyRef.current[to]];
+    annotationsRef.current = value;
+    setAnnotations(value);
+    setSelectedId((current) => (value.some((a) => a.id === current) ? current : null));
   };
 
+  const handleUndo = () => applyHistory("undo");
+  const handleRedo = () => applyHistory("redo");
+
   const handleClearAll = () => {
-    setAnnotations([]);
+    if (annotations.length === 0) return;
+    commitAnnotations([]);
     setSelectedId(null);
   };
 
@@ -1062,14 +1098,26 @@ export default function ImageAnnotationCanvas({
         <View style={styles.actionGroup}>
           <TouchableOpacity
             onPress={handleUndo}
-            disabled={annotations.length === 0}
+            disabled={historyRef.current.past.length === 0}
             style={[
               styles.actionButton,
-              annotations.length === 0 && styles.disabled,
+              historyRef.current.past.length === 0 && styles.disabled,
             ]}
             accessibilityLabel="Undo"
           >
             <Ionicons name="arrow-undo" size={22} color="#fff" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleRedo}
+            disabled={historyRef.current.future.length === 0}
+            style={[
+              styles.actionButton,
+              historyRef.current.future.length === 0 && styles.disabled,
+            ]}
+            accessibilityLabel="Redo"
+          >
+            <Ionicons name="arrow-redo" size={22} color="#fff" />
           </TouchableOpacity>
 
           <TouchableOpacity
