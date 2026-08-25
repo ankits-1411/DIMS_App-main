@@ -51,6 +51,51 @@ export const PALETTE = [
 
 export const DEFAULT_ANNOTATION_COLOR = PALETTE[0];
 
+const deepClone = <T,>(value: T): T => {
+  if (Array.isArray(value)) return value.map(deepClone) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, deepClone(item)])
+    ) as T;
+  }
+  return value;
+};
+
+const annotationBounds = (annotation: Annotation) => ({
+  left: annotation.x - Math.abs(annotation.width) / 2,
+  top: annotation.y - Math.abs(annotation.height) / 2,
+  right: annotation.x + Math.abs(annotation.width) / 2,
+  bottom: annotation.y + Math.abs(annotation.height) / 2,
+});
+
+/** Deep-copies and offsets one annotation without changing the source list. */
+export const cloneAnnotation = (
+  annotations: Annotation[],
+  annotationId: string,
+  offsetX = 0.02,
+  offsetY = 0.02
+): Annotation | null => {
+  const source = annotations.find((annotation) => annotation.id === annotationId);
+  if (!source) return null;
+
+  const clone = deepClone(source);
+  do {
+    clone.id = newAnnotationId();
+  } while (annotations.some((annotation) => annotation.id === clone.id));
+  const bounds = annotationBounds(clone);
+  const dx = Math.max(-bounds.left, Math.min(offsetX, 1 - bounds.right));
+  const dy = Math.max(-bounds.top, Math.min(offsetY, 1 - bounds.bottom));
+  clone.x += dx;
+  clone.y += dy;
+  if (clone.points) {
+    clone.points = clone.points.map((point) => ({
+      x: point.x + dx,
+      y: point.y + dy,
+    }));
+  }
+  return clone;
+};
+
 /** Base stroke widths in canvas pixels, converted to normalised on commit. */
 export const STROKE_PX = 3;
 export const HIGHLIGHT_STROKE_PX = 16;

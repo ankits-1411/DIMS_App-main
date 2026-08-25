@@ -29,6 +29,7 @@ import { scheduleOnRN } from "react-native-worklets";
 import {
   Annotation,
   AnnotationTool,
+  cloneAnnotation,
   DEFAULT_ANNOTATION_COLOR,
   HIGHLIGHT_STROKE_PX,
   isShapeTool,
@@ -494,6 +495,14 @@ export default function ImageAnnotationCanvas({
     setSelectedId((current) => (current === id ? null : current));
     console.log("Annotation deleted:", id);
   }, []);
+
+  const handleClone = useCallback(() => {
+    if (!selectedId) return;
+    const cloned = cloneAnnotation(annotations, selectedId);
+    if (!cloned) return;
+    setAnnotations((prev) => [...prev, cloned]);
+    setSelectedId(cloned.id);
+  }, [annotations, selectedId]);
 
   /**
    * A tap that did not turn into a drag. Selects, places or erases depending on
@@ -1186,6 +1195,15 @@ export default function ImageAnnotationCanvas({
               accessibilityLabel="Deselect"
             >
               <Text style={styles.selectionButtonText}>Deselect</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleClone}
+              style={styles.selectionButton}
+              accessibilityLabel="Clone selected annotation"
+            >
+              <Ionicons name="copy-outline" size={16} color="#fff" />
+              <Text style={styles.selectionButtonText}>Clone</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
